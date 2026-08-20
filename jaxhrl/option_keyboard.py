@@ -8,9 +8,9 @@ import optax
 from flax import nnx
 import flashbax as fbx
 
-from brll_core.algorithms.common.utils import parse_config
-from brll_core.algorithms.common.logger import Logger
-from brll_core.algorithms.common.jax_wrappers import make_jax_env
+from jaxhrl.common.utils import parse_config
+from jaxhrl.common.logger import Logger
+from jaxhrl.common.jax_wrappers import make_jax_env
 
 
 class GRUCell(nnx.Module): 
