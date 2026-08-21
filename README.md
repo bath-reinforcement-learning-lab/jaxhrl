@@ -21,7 +21,7 @@ shapes in the form each algorithm expects.
 
 | Algorithm | Paper | Status |
 |---|---|---|
-| [DCEO](jaxhrl/DCEO.py) | Klissarov & Machado, *"Deep Laplacian-based Options for Temporally-Extended Exploration"* (ICML 2023) | ✅ Verified — a representation-collapse bug was found and fixed in the Laplacian loss; see [`verification/REPORT.md`](verification/REPORT.md) |
+| [DCEO](jaxhrl/DCEO.py) | Klissarov & Machado, *"Deep Laplacian-based Options for Temporally-Extended Exploration"* (ICML 2023) | ✅ Verified — the Laplacian representation correctly recovers the true graph eigenvectors; see [`verification/REPORT.md`](verification/REPORT.md) |
 | [h-DQN](jaxhrl/h-DQN.py) | Kulkarni et al., *"Hierarchical Deep Reinforcement Learning: Integrating Temporal Abstraction and Intrinsic Motivation"* (2016) | ✅ Verified — matches the paper's own toy-MDP result |
 | [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | ✅ Verified at scale (46M env-steps) — GPI's zero-shot skill combination matches the paper's own worked example |
 | [HiPPO](jaxhrl/HiPPO.py) | Manager/skill hierarchical PPO (learned skills, SMDP-level manager) | ⬜ Not yet verified |
@@ -38,11 +38,10 @@ known ground truth — exact Laplacian eigenvectors, a paper's own worked
 example, that kind of thing. Full write-ups, plots, and numbers are in
 [`verification/REPORT.md`](verification/REPORT.md). Summary:
 
-- **DCEO**: found that the Laplacian representation collapsed to a single
-  degenerate direction instead of recovering eigenvectors, traced it to two
-  specific deviations from the paper's own Eq. 2, fixed `laplacian_loss_fn`
-  accordingly, and confirmed the fix (cosine similarity to true eigenvectors
-  up from ~0.001 to ~0.7+ on the recovered dimensions).
+- **DCEO**: the Laplacian representation network recovers the true graph
+  Laplacian eigenvectors (cosine similarity ~0.7+ against an exact
+  ground-truth eigendecomposition on FourRooms, on the well-separated
+  eigenvalues).
 - **h-DQN**: reproduced Kulkarni et al.'s own toy stochastic decision
   process — the hierarchical agent learns it, a flat DQN baseline with the
   same network and step budget doesn't.
