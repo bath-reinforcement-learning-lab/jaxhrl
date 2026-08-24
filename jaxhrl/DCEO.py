@@ -13,7 +13,7 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.90"
 os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
 
 from jaxhrl.common.utils import parse_config
-from haxhrl.common.logger import Logger
+from jaxhrl.common.logger import Logger
 from jaxhrl.common.wrappers import make_jax_env
 
 # Flax Neural Networks
@@ -122,20 +122,54 @@ def batch_select_dceo_action(keys, obs, dones, taus, options, q_params, q_net, c
 # Losses
 
 def laplacian_loss_fn(laplacian_params, laplacian_net, obs_a, obs_b, obs_i, obs_j, beta):
+    """Cascaded generalized-Laplacian objective (Eq. 2 of Klissarov & Machado,
+    2023, "Deep Laplacian-based Options for Temporally-Extended Exploration"),
+    which is Wang et al. (2021)'s cutoff-weighted extension of the graph-drawing
+    objective from Wu, Tucker & Nachum (2019).
+
+    Both terms are cascaded over a cutoff index i=1..rep_dim (summing over
+    j,k <= i for every cutoff): this asymmetrically weights lower-index
+    dimensions more heavily, which is what forces f_1..f_rep_dim to converge
+    to the individual, correctly-ordered eigenfunctions rather than an
+    arbitrary rotation of their span (and not incidentally, is what stops the
+    loss from being invariant to every dimension collapsing onto the same
+    direction, since dimensions are no longer interchangeable).
+
+    obs_a, obs_b: on-policy consecutive transition pairs (s_t, s_{t+1}), for
+        the attractive term.
+    obs_i, obs_j: two INDEPENDENT samples from the state distribution ("u"
+        and "v" in Wu et al.'s Eq. 6) used for the orthonormality residual.
+        Squaring a Monte-Carlo expectation is biased upward, so Wu et al.'s
+        estimator computes the (f_j*f_k - delta_jk) residual separately
+        within EACH independent batch (same-state pairing in each), then
+        multiplies the two independent residual estimates -- NOT a single
+        Gram matrix built by pairing dimension j from batch i against
+        dimension k from batch j, which would estimate E[f_j]*E[f_k] rather
+        than E[f_j(s)f_k(s)].
+    """
     phi_a = laplacian_net.apply(laplacian_params, obs_a)
     phi_b = laplacian_net.apply(laplacian_params, obs_b)
-    attractive = jnp.mean(jnp.sum((phi_a - phi_b) ** 2, axis=-1))
+    rep_dim = phi_a.shape[-1]
 
-    phi_i = laplacian_net.apply(laplacian_params, obs_i)
-    phi_j = laplacian_net.apply(laplacian_params, obs_j)
-    batch_size = phi_i.shape[0]
-    gram = (phi_i.T @ phi_j) / batch_size  # [rep_dim, rep_dim]
-    rep_dim = gram.shape[0]
+    # cascade weight for dimension k (1-indexed): how many cutoffs i in
+    # {k,...,rep_dim} include k, i.e. (rep_dim - k + 1).
+    dim_idx = jnp.arange(1, rep_dim + 1, dtype=jnp.float32)
+    attractive_weight = rep_dim - dim_idx + 1.0  # (rep_dim,)
+    attractive = 0.5 * jnp.mean(jnp.sum(attractive_weight * (phi_a - phi_b) ** 2, axis=-1))
+
+    phi_u = laplacian_net.apply(laplacian_params, obs_i)
+    phi_v = laplacian_net.apply(laplacian_params, obs_j)
+    batch_size = phi_u.shape[0]
     identity = jnp.eye(rep_dim)
-    # Lower-triangular (incl. diagonal) mask
-    # each pair (i, j) with i >= j is penalized once.
-    mask = jnp.tril(jnp.ones((rep_dim, rep_dim)))
-    orthogonality = jnp.sum(((gram - identity) ** 2) * mask) / jnp.sum(mask)
+
+    residual_u = (phi_u.T @ phi_u) / batch_size - identity  # same-state pairing within batch u
+    residual_v = (phi_v.T @ phi_v) / batch_size - identity  # same-state pairing within batch v
+
+    # cascade weight for pair (j, k) (1-indexed): (rep_dim - max(j, k) + 1)
+    pair_max = jnp.maximum(dim_idx[:, None], dim_idx[None, :])
+    orthogonality_weight = rep_dim - pair_max + 1.0
+
+    orthogonality = jnp.sum(orthogonality_weight * residual_u * residual_v)
 
     loss = attractive + beta * orthogonality
     return loss, {"lap_attractive": attractive, "lap_orthogonality": orthogonality}

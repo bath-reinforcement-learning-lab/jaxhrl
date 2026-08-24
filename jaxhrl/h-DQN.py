@@ -16,7 +16,7 @@ os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
 
 from jaxhrl.common.utils import parse_config
 from jaxhrl.common.logger import Logger
-from jaxhrl.common.jax_wrappers import make_jax_env, run_eval_episode
+from jaxhrl.common.wrappers import make_jax_env, run_eval_episode
 
 
 class QNetwork(nnx.Module):
