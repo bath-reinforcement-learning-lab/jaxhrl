@@ -1,6 +1,11 @@
 # Option Keyboard in JAX
 # From "The Option Keyboard: Combining Skills in Reinforcement Learning"
 from typing import Any, NamedTuple
+from functools import partial
+import os
+os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.90"
+os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
 
 import jax
 import jax.numpy as jnp
@@ -10,7 +15,7 @@ import flashbax as fbx
 
 from jaxhrl.common.utils import parse_config
 from jaxhrl.common.logger import Logger
-from jaxhrl.common.jax_wrappers import make_jax_env
+from jaxhrl.common.wrappers import make_jax_env
 
 
 class GRUCell(nnx.Module): 
@@ -330,7 +335,7 @@ if __name__ == "__main__":
         }
         return new_carry, metrics
 
-    @jax.jit(donate_argnums=0)
+    @partial(jax.jit, donate_argnums=0)
     def run_chunk(carry, keys):
         return jax.lax.scan(scan_body, carry, keys)
 
