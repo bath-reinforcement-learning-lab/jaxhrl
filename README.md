@@ -5,12 +5,10 @@ Open Source Hierarchical Reinforcement Learning algorithms implemented in pure J
 ## Why JAX
 
 Every algorithm here — environment stepping, agent forward/backward passes,
-replay, and the training loop itself — is written to live entirely on-device
+replay, and the training loop itself — is fully JITTed
 and run under `jax.jit`/`jax.lax.scan`. There's no per-step Python/host
-round-trip. That has one big practical consequence: **training scales to
-hundreds or thousands of parallel environments for free**, via `jax.vmap`,
-as long as the environment's `reset`/`step` functions are themselves
-jittable (e.g. a [gymnax](https://github.com/RobertTLange/gymnax) env).
+round-trip. That allows them to run end-to-end with fully JITTed environments such as craftax/gymnax, running 
+huge numbers of environments in parallel via `jax.vmap`.
 Most algorithms here default to `num_envs: 1024`. Swapping in a different
 environment doesn't require touching the algorithm code — only the wrapper
 in [`jaxhrl/common/wrappers.py`](jaxhrl/common/wrappers.py) needs adjusting
@@ -31,11 +29,9 @@ shapes in the form each algorithm expects.
 
 ## Verification
 
-Paper fidelity isn't assumed — it's checked. [`verification/`](verification/)
+[`verification/`](verification/)
 contains standalone scripts that import each algorithm's actual network and
-loss code (not reimplementations) and test it against toy environments with
-known ground truth — exact Laplacian eigenvectors, a paper's own worked
-example, that kind of thing. Full write-ups, plots, and numbers are in
+loss code and test it against toy environments from the original papers.. Full write-ups, plots, and numbers are in
 [`verification/REPORT.md`](verification/REPORT.md). Summary:
 
 - **DCEO**: the Laplacian representation network recovers the true graph
@@ -46,8 +42,7 @@ example, that kind of thing. Full write-ups, plots, and numbers are in
   process — the hierarchical agent learns it, a flat DQN baseline with the
   same network and step budget doesn't.
 - **Option Keyboard**: reproduced Barreto et al.'s own "Foraging World"
-  worked example at scale — GPI combines two pretrained skills into
-  optimal-ish behavior for a weight vector neither was trained on.
+  worked example at scale.
 - HiPPO / HAC / HIRO / option_critic: **TODO**.
 
 Rerun any check with e.g. `python verification/dceo_verify.py`.
