@@ -1,0 +1,17 @@
+=== Running h-DQN on the Kulkarni et al. toy chain (6 states, p_left=0.5, p_right=1.0, horizon=10) ===
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+    [h-DQN] episode     0  recent success rate=0.000
+    [h-DQN] episode   500  recent success rate=0.058
+    [h-DQN] episode  1000  recent success rate=0.040
+    [h-DQN] episode  1500  recent success rate=0.036
+    [h-DQN] episode  2000  recent success rate=0.096
+  h-DQN overall success rate: 0.069  (last 500 eps: 0.116)
+=== Running flat DQN baseline (same network class, same env-step budget) ===
+    [flat DQN] episode     0  recent success rate=0.000
+    [flat DQN] episode   500  recent success rate=0.038
+    [flat DQN] episode  1000  recent success rate=0.056
+    [flat DQN] episode  1500  recent success rate=0.024
+    [flat DQN] episode  2000  recent success rate=0.004
+  flat DQN overall success rate: 0.027  (last 500 eps: 0.014)
+
+Done in 91.4s. 

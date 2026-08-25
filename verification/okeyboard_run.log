@@ -1,0 +1,33 @@
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+=== Pretraining successor features for W0 = {(1,0), (0,1)} (paper's exact basis set) ===
+    [SF pretrain] macro-step      0  env-steps=      256  eps=1.000  elapsed=0.2s  hit-rate(y1,y2,y3)=(0.0234,0.0156,0.0156)
+    [SF pretrain] macro-step  10000  env-steps=  2560256  eps=1.000  elapsed=37.1s  hit-rate(y1,y2,y3)=(0.0202,0.0203,0.0206)
+    [SF pretrain] macro-step  20000  env-steps=  5120256  eps=1.000  elapsed=74.4s  hit-rate(y1,y2,y3)=(0.0203,0.0204,0.0204)
+    [SF pretrain] macro-step  30000  env-steps=  7680256  eps=1.000  elapsed=111.4s  hit-rate(y1,y2,y3)=(0.0204,0.0203,0.0204)
+    [SF pretrain] macro-step  40000  env-steps= 10240256  eps=1.000  elapsed=148.2s  hit-rate(y1,y2,y3)=(0.0203,0.0203,0.0203)
+    [SF pretrain] macro-step  50000  env-steps= 12800256  eps=1.000  elapsed=185.8s  hit-rate(y1,y2,y3)=(0.0206,0.0203,0.0205)
+    [SF pretrain] macro-step  60000  env-steps= 15360256  eps=1.000  elapsed=225.0s  hit-rate(y1,y2,y3)=(0.0205,0.0206,0.0204)
+    [SF pretrain] macro-step  70000  env-steps= 17920256  eps=1.000  elapsed=263.7s  hit-rate(y1,y2,y3)=(0.0205,0.0206,0.0204)
+    [SF pretrain] macro-step  80000  env-steps= 20480256  eps=1.000  elapsed=302.4s  hit-rate(y1,y2,y3)=(0.0205,0.0205,0.0203)
+    [SF pretrain] macro-step  90000  env-steps= 23040256  eps=1.000  elapsed=342.0s  hit-rate(y1,y2,y3)=(0.0205,0.0203,0.0203)
+    [SF pretrain] macro-step 100000  env-steps= 25600256  eps=1.000  elapsed=380.4s  hit-rate(y1,y2,y3)=(0.0202,0.0203,0.0205)
+    [SF pretrain] macro-step 110000  env-steps= 28160256  eps=1.000  elapsed=421.2s  hit-rate(y1,y2,y3)=(0.0202,0.0205,0.0204)
+    [SF pretrain] macro-step 120000  env-steps= 30720256  eps=1.000  elapsed=459.6s  hit-rate(y1,y2,y3)=(0.0204,0.0203,0.0205)
+    [SF pretrain] macro-step 130000  env-steps= 33280256  eps=1.000  elapsed=499.6s  hit-rate(y1,y2,y3)=(0.0201,0.0205,0.0205)
+    [SF pretrain] macro-step 140000  env-steps= 35840256  eps=1.000  elapsed=539.9s  hit-rate(y1,y2,y3)=(0.0205,0.0204,0.0204)
+    [SF pretrain] macro-step 150000  env-steps= 38400256  eps=1.000  elapsed=582.0s  hit-rate(y1,y2,y3)=(0.0207,0.0205,0.0204)
+    [SF pretrain] macro-step 160000  env-steps= 40960256  eps=1.000  elapsed=623.0s  hit-rate(y1,y2,y3)=(0.0205,0.0205,0.0201)
+    [SF pretrain] macro-step 170000  env-steps= 43520256  eps=1.000  elapsed=664.3s  hit-rate(y1,y2,y3)=(0.0205,0.0202,0.0203)
+    [SF pretrain] finished: 46080000 total env-steps in 704.3s
+
+=== SF accuracy check: psi predictions vs. empirical discounted cumulant returns ===
+    correlation(psi, empirical) per cumulant dim: [0.434 0.361]  mean_abs_error=3.823
+
+=== GPI zero-shot combination test (paper's Scenario A2 setup) ===
+    w=(1,0) [trained basis]                     GPI=+0.456  best-single-option=+0.469  optimal=+1.000
+    w=(0,1) [trained basis]                     GPI=+0.474  best-single-option=+0.464  optimal=+1.000
+    w=(1,-1) [NOVEL -- paper's key example]     GPI=+0.413  best-single-option=+0.361  optimal=+1.000
+    w=(-1,1) [NOVEL]                            GPI=+0.003  best-single-option=+0.040  optimal=+1.000
+    w=(1,1) [NOVEL]                             GPI=+0.923  best-single-option=+0.889  optimal=+2.000
+
+Done in 725.9s. Summary written to jaxhrl/verification/results/okeyboard_verification_summary.json
