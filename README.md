@@ -4,11 +4,7 @@ Open Source Hierarchical Reinforcement Learning algorithms implemented in pure J
 
 ## Why JAX
 
-Every algorithm here — environment stepping, agent forward/backward passes,
-replay, and the training loop itself — is fully JITTed
-and run under `jax.jit`/`jax.lax.scan`. There's no per-step Python/host
-round-trip. That allows them to run end-to-end with fully JITTed environments such as craftax/gymnax, running 
-huge numbers of environments in parallel via `jax.vmap`.
+Every algorithm is written in pure jax and fully JITTed. That allows them to run end-to-end with fully JITTed environments such as craftax/gymnax, running  huge numbers of environments in parallel via `jax.vmap`.
 Most algorithms here default to `num_envs: 1024`. Swapping in a different
 environment doesn't require touching the algorithm code — only the wrapper
 in [`jaxhrl/common/wrappers.py`](jaxhrl/common/wrappers.py) needs adjusting
@@ -22,7 +18,7 @@ shapes in the form each algorithm expects.
 | [DCEO](jaxhrl/DCEO.py) | Klissarov & Machado, *"Deep Laplacian-based Options for Temporally-Extended Exploration"* (ICML 2023) | ✅ Verified — the Laplacian representation correctly recovers the true graph eigenvectors |
 | [h-DQN](jaxhrl/h-DQN.py) | Kulkarni et al., *"Hierarchical Deep Reinforcement Learning: Integrating Temporal Abstraction and Intrinsic Motivation"* (2016) | ✅ Verified — matches the paper's own toy-MDP result |
 | [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | ✅ GPI's zero-shot skill combination matches the paper's own worked example |
-| [HiPPO](jaxhrl/HiPPO.py) | Manager/skill hierarchical PPO (learned skills, SMDP-level manager) | ⬜ Not yet verified |
+| [HiPPO](jaxhrl/HiPPO.py) | Li, Florensa, Clavera & Abbeel, *"Sub-Policy Adaptation for Hierarchical Reinforcement Learning"* (ICLR 2020) | ✅ Verified — code-fidelity audit against the paper's algorithm/equations; one gap found and fixed (see below) |
 | [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | 🚧 Stub — not yet implemented |
 | [HIRO](jaxhrl/HIRO.py) | Nachum et al., *"Data-Efficient Hierarchical Reinforcement Learning"* | 🚧 Stub — not yet implemented |
 | [option_critic](jaxhrl/option_critic.py) | Bacon, Harb & Precup, *"The Option-Critic Architecture"* | 🚧 Stub — not yet implemented |
@@ -43,7 +39,12 @@ loss code and test it against toy environments from the original papers.. Full w
   same network and step budget doesn't.
 - **Option Keyboard**: reproduced Barreto et al.'s own "Foraging World"
   worked example at scale.
-- HiPPO / HAC / HIRO / option_critic: **TODO**.
+- **HiPPO**: code-fidelity audit against Li et al. (ICLR 2020) — checked the
+  implementation against the paper's Algorithm 1/2 and equations directly
+  (not an empirical reproduction). Found one gap (both networks were
+  missing the "time remaining until next decision" input Appendix A
+  specifies for the randomized-period variant), fixed it, and re-verified.
+- HAC / HIRO / option_critic: **TODO**.
 
 Rerun any check with e.g. `python verification/dceo_verify.py`.
 
@@ -51,7 +52,7 @@ Rerun any check with e.g. `python verification/dceo_verify.py`.
 
 ```bash
 pip install jax flax optax flashbax gymnax pyyaml  # + wandb/mlflow if logging with them
-python jaxhrl/DCEO.py --config path/to/config.yaml [--seed 0]
+python jaxhrl.DCEO --config path/to/config.yaml [--seed 0]
 ```
 
 Every algorithm takes the same `--config <yaml>` (and optional `--seed`)
