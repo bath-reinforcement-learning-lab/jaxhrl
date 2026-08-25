@@ -1,6 +1,6 @@
 # jaxhrl
 
-Hierarchical Reinforcement Learning algorithms implemented in pure JAX.
+Open Source Hierarchical Reinforcement Learning algorithms implemented in pure JAX.
 
 ## Why JAX
 
@@ -21,9 +21,9 @@ shapes in the form each algorithm expects.
 
 | Algorithm | Paper | Status |
 |---|---|---|
-| [DCEO](jaxhrl/DCEO.py) | Klissarov & Machado, *"Deep Laplacian-based Options for Temporally-Extended Exploration"* (ICML 2023) | ✅ Verified — the Laplacian representation correctly recovers the true graph eigenvectors; see [`verification/REPORT.md`](verification/REPORT.md) |
+| [DCEO](jaxhrl/DCEO.py) | Klissarov & Machado, *"Deep Laplacian-based Options for Temporally-Extended Exploration"* (ICML 2023) | ✅ Verified — the Laplacian representation correctly recovers the true graph eigenvectors |
 | [h-DQN](jaxhrl/h-DQN.py) | Kulkarni et al., *"Hierarchical Deep Reinforcement Learning: Integrating Temporal Abstraction and Intrinsic Motivation"* (2016) | ✅ Verified — matches the paper's own toy-MDP result |
-| [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | ✅ Verified at scale (46M env-steps) — GPI's zero-shot skill combination matches the paper's own worked example |
+| [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | ✅ GPI's zero-shot skill combination matches the paper's own worked example |
 | [HiPPO](jaxhrl/HiPPO.py) | Manager/skill hierarchical PPO (learned skills, SMDP-level manager) | ⬜ Not yet verified |
 | [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | 🚧 Stub — not yet implemented |
 | [HIRO](jaxhrl/HIRO.py) | Nachum et al., *"Data-Efficient Hierarchical Reinforcement Learning"* | 🚧 Stub — not yet implemented |
@@ -81,9 +81,41 @@ training:
 No example config YAMLs ship yet — check each script's `__main__` block for
 the exact keys it reads.
 
-### Known issue
+## Logging
 
-`jaxhrl/h-DQN.py` and `jaxhrl/option_keyboard.py` both import
-`jaxhrl.common.jax_wrappers`, a module that doesn't exist in this repo (only
-`jaxhrl.common.wrappers` does) — so as of now, neither can run end-to-end via
-the command above until that import is fixed or the module is added.
+Every algorithm shares one `Logger` ([`jaxhrl/common/logger.py`](jaxhrl/common/logger.py)),
+turned on entirely from the config YAML — no code changes needed, and you
+can enable more than one backend at once:
+
+```yaml
+experiment: my_dceo_run   # required by Logger regardless of backend
+save_json: true           # local JSON, no extra service needed
+use_mlflow: true          # logs params/metrics to an MLflow experiment
+use_wandb: true            # logs to Weights & Biases
+project: my-wandb-project  # only used if use_wandb
+entity: my-team             # optional, falls back to your personal workspace if inaccessible
+overwrite: false            # set true to wipe a previous run with the same experiment name
+```
+
+- **`save_json`** — metrics are buffered in memory and written to
+  `results/<experiment>/runs/<timestamp>.json` on close; a `config.yaml` is
+  saved alongside and checked for consistency on reruns of the same
+  `experiment` name (mismatches raise, unless `overwrite: true`).
+- **`use_mlflow`** — standard `mlflow.log_params`/`log_metrics` under an
+  experiment named after `experiment`.
+- **`use_wandb`** — standard `wandb.init`/`wandb.log`. W&B is also currently
+  the *only* backend wired up for two extras that each algorithm's periodic
+  eval hook (`eval.enabled` in the config) calls into:
+  - `logger.save_checkpoint(params, step)` — uploads Flax params (msgpack)
+    as a W&B Artifact.
+  - `logger.log_eval_trajectory(step, trajectory, frames=None)` — logs a
+    per-timestep eval table (reward, cumulative reward, option/skill chosen)
+    and an optional rollout video.
+
+  Both are no-ops if `use_wandb` isn't set — so with only `save_json` and/or
+  `use_mlflow` enabled, periodic checkpoints and eval-trajectory logging
+  are silently skipped even if `eval.enabled: true`.
+
+If none of the three backends are enabled, `Logger` prints a warning (not an
+error) and just runs without logging anywhere.
+
