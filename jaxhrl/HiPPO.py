@@ -50,27 +50,39 @@ class SymbolicEncoder(nn.Module):
 
 class ManagerActorCritic(nn.Module):
     """pi_theta_h(z | s): the manager policy over skills, plus V_h(s).
+
+    Li et al. 2020 (HiPPO), Appendix A: with a randomized time-commitment
+    (the only mode this file implements), "we ... provide the number of
+    timesteps until the next latent selection as an input into both the
+    manager and skill networks" -- `time_remaining` below.
     """
     num_skills: int
     latent_dim: int = 256
 
     @nn.compact
-    def __call__(self, x):
-        h = SymbolicEncoder(hidden_dim=self.latent_dim)(x)
+    def __call__(self, x, time_remaining):
+        x = x.astype(jnp.float32).reshape((x.shape[0], -1))
+        time_remaining = time_remaining.astype(jnp.float32).reshape((-1, 1))
+        h = SymbolicEncoder(hidden_dim=self.latent_dim)(jnp.concatenate([x, time_remaining], axis=-1))
         logits = nn.Dense(features=self.num_skills)(h)
         value = nn.Dense(features=1)(h)
         return logits, jnp.squeeze(value, axis=-1)
 
 
 class SkillActorCritic(nn.Module):
-    """pi_theta_l(a | s, z): the intra-option/skill policy, plus V_l(s, z)."""
+    """pi_theta_l(a | s, z): the intra-option/skill policy, plus V_l(s, z).
+
+    Also takes `time_remaining` -- see ManagerActorCritic docstring.
+    """
     num_actions: int
     num_skills: int
     latent_dim: int = 256
 
     @nn.compact
-    def __call__(self, x, skill_idx):
-        h = SymbolicEncoder(hidden_dim=self.latent_dim)(x)
+    def __call__(self, x, skill_idx, time_remaining):
+        x = x.astype(jnp.float32).reshape((x.shape[0], -1))
+        time_remaining = time_remaining.astype(jnp.float32).reshape((-1, 1))
+        h = SymbolicEncoder(hidden_dim=self.latent_dim)(jnp.concatenate([x, time_remaining], axis=-1))
         skill_one_hot = jax.nn.one_hot(skill_idx, self.num_skills)
         h = jnp.concatenate([h, skill_one_hot], axis=-1)
         h = nn.Dense(features=self.latent_dim)(h)
@@ -99,19 +111,25 @@ def select_hippo_action(key, obs, commitment_left, skill, manager_params, manage
 
     key, p_key, z_key, a_key = jax.random.split(key, 4)
 
-    manager_logits, manager_value = manager_net.apply(manager_params, obs[None, :])
+    # p is drawn from a fixed prior independent of any network params, so it
+    # (and the resulting new_commitment) can be resolved before the manager
+    # forward pass -- letting both networks condition on the time remaining
+    # until the next decision, per Appendix A.
+    sampled_p = p_min + jax.random.randint(p_key, (), 0, p_max - p_min + 1)
+    new_commitment = jnp.where(need_decision, sampled_p, commitment_left)
+    time_remaining = new_commitment.astype(jnp.float32) / p_max
+
+    manager_logits, manager_value = manager_net.apply(manager_params, obs[None, :], time_remaining[None])
     manager_logits, manager_value = manager_logits[0], manager_value[0]
 
-    sampled_p = p_min + jax.random.randint(p_key, (), 0, p_max - p_min + 1)
     sampled_skill = jnp.where(
         greedy, jnp.argmax(manager_logits), jax.random.categorical(z_key, manager_logits)
     )
 
-    new_commitment = jnp.where(need_decision, sampled_p, commitment_left)
     new_skill = jnp.where(need_decision, sampled_skill, skill)
     manager_logp = jax.nn.log_softmax(manager_logits)[new_skill]
 
-    skill_logits, skill_value = skill_net.apply(skill_params, obs[None, :], new_skill[None])
+    skill_logits, skill_value = skill_net.apply(skill_params, obs[None, :], new_skill[None], time_remaining[None])
     skill_logits, skill_value = skill_logits[0], skill_value[0]
     action = jnp.where(
         greedy, jnp.argmax(skill_logits), jax.random.categorical(a_key, skill_logits)
@@ -119,7 +137,7 @@ def select_hippo_action(key, obs, commitment_left, skill, manager_params, manage
     skill_logp = jax.nn.log_softmax(skill_logits)[action]
 
     return (action, new_skill, new_commitment, need_decision,
-            manager_logp, manager_value, skill_logp, skill_value, key)
+            manager_logp, manager_value, skill_logp, skill_value, key, time_remaining)
 
 
 def batch_select_hippo_action(keys, obs, commitment_left, skills, manager_params, manager_net,
@@ -254,8 +272,8 @@ def ppo_actor_critic_loss(logits, values, old_logp, actions, advantages, returns
 
 
 def skill_loss_fn(skill_params, skill_net, obs, skills, actions, old_logp, advantages,
-                   returns, old_values, config):
-    logits, values = skill_net.apply(skill_params, obs, skills)
+                   returns, old_values, time_remaining, config):
+    logits, values = skill_net.apply(skill_params, obs, skills, time_remaining)
     return ppo_actor_critic_loss(
         logits, values, old_logp, actions, advantages, returns, old_values,
         config['clip_eps'], config['entropy_coef'], config['value_coef'],
@@ -263,8 +281,8 @@ def skill_loss_fn(skill_params, skill_net, obs, skills, actions, old_logp, advan
 
 
 def manager_loss_fn(manager_params, manager_net, obs, skills, old_logp, advantages,
-                     returns, old_values, valid_mask, config):
-    logits, values = manager_net.apply(manager_params, obs)
+                     returns, old_values, valid_mask, time_remaining, config):
+    logits, values = manager_net.apply(manager_params, obs, time_remaining)
     return ppo_actor_critic_loss(
         logits, values, old_logp, skills, advantages, returns, old_values,
         config['clip_eps'], config['entropy_coef'], config['value_coef'], mask=valid_mask,
@@ -319,14 +337,15 @@ if __name__ == "__main__":
     # Initialize
     dummy_obs = jnp.zeros((1, config['obs_dim']), dtype=jnp.float32)
     dummy_skill_idx = jnp.zeros((1,), dtype=jnp.int32)
+    dummy_time_remaining = jnp.zeros((1,), dtype=jnp.float32)
 
     manager_net = ManagerActorCritic(num_skills=config['num_skills'], latent_dim=256)
     skill_net = SkillActorCritic(num_actions=config['num_actions'], num_skills=config['num_skills'], latent_dim=256)
 
     init_rng_manager, init_rng_skill = jax.random.split(key, 2)
     params = {
-        'manager': manager_net.init(init_rng_manager, dummy_obs),
-        'skill': skill_net.init(init_rng_skill, dummy_obs, dummy_skill_idx),
+        'manager': manager_net.init(init_rng_manager, dummy_obs, dummy_time_remaining),
+        'skill': skill_net.init(init_rng_skill, dummy_obs, dummy_skill_idx, dummy_time_remaining),
     }
 
     # Optimizers (global-norm clipping)
@@ -361,6 +380,7 @@ if __name__ == "__main__":
         "skill_value": jnp.zeros((), dtype=jnp.float32),
         "manager_logp": jnp.zeros((), dtype=jnp.float32),
         "manager_value": jnp.zeros((), dtype=jnp.float32),
+        "time_remaining": jnp.zeros((), dtype=jnp.float32),
     }
     buffer_state = buffer.init(dummy_transition)
 
@@ -417,7 +437,8 @@ if __name__ == "__main__":
             action_keys = jax.random.split(step_rng, num_envs)
 
             (actions, next_skills, next_commitment, decision_flags,
-             manager_logp, manager_value, skill_logp, skill_value, _) = batch_select_hippo_action(
+             manager_logp, manager_value, skill_logp, skill_value, _,
+             time_remaining) = batch_select_hippo_action(
                 action_keys, c.obs, c.commitment_left, c.skills,
                 c.params['manager'], manager_net, c.params['skill'], skill_net, config,
             )
@@ -459,6 +480,7 @@ if __name__ == "__main__":
                 "skill_value": skill_value,
                 "manager_logp": manager_logp,
                 "manager_value": manager_value,
+                "time_remaining": time_remaining,
             }
             buffer_state = buffer.add(c.buffer_state, transitions)
 
@@ -482,16 +504,17 @@ if __name__ == "__main__":
     # JITTED PPO Update 
 
     @functools.partial(jax.jit, donate_argnums=(1, 2))
-    def ppo_update(rng, params, opt_state, buffer_state, bootstrap_obs, bootstrap_skill):
+    def ppo_update(rng, params, opt_state, buffer_state, bootstrap_obs, bootstrap_skill,
+                    bootstrap_time_remaining):
         raw = buffer_state.experience
         raw = jax.tree.map(lambda a: a[:, :rollout_horizon, ...], raw)
         batch = jax.tree.map(lambda a: jnp.swapaxes(a, 0, 1), raw)
 
         manager_bootstrap_logits, manager_bootstrap_value = manager_net.apply(
-            params['manager'], bootstrap_obs
+            params['manager'], bootstrap_obs, bootstrap_time_remaining
         )
         skill_bootstrap_logits, skill_bootstrap_value = skill_net.apply(
-            params['skill'], bootstrap_obs, bootstrap_skill
+            params['skill'], bootstrap_obs, bootstrap_skill, bootstrap_time_remaining
         )
 
         skill_adv, skill_ret = jax.vmap(
@@ -518,6 +541,7 @@ if __name__ == "__main__":
             "manager_adv": manager_adv.reshape(-1),
             "manager_ret": manager_target.reshape(-1),
             "manager_valid": manager_valid.reshape(-1),
+            "time_remaining": batch["time_remaining"].reshape(-1),
         }
         total_samples = rollout_horizon * num_envs
         minibatch_size = total_samples // config['num_minibatches']
@@ -534,7 +558,8 @@ if __name__ == "__main__":
                 def s_loss(p):
                     return skill_loss_fn(
                         p, skill_net, mb["obs"], mb["skill"], mb["action"],
-                        mb["skill_logp"], mb["skill_adv"], mb["skill_ret"], mb["skill_value"], config,
+                        mb["skill_logp"], mb["skill_adv"], mb["skill_ret"], mb["skill_value"],
+                        mb["time_remaining"], config,
                     )
                 (loss_skill, skill_aux), grads_skill = jax.value_and_grad(s_loss, has_aux=True)(params['skill'])
                 skill_updates, new_skill_opt = skill_optimizer.update(
@@ -545,7 +570,8 @@ if __name__ == "__main__":
                 def m_loss(p):
                     return manager_loss_fn(
                         p, manager_net, mb["obs"], mb["skill"], mb["manager_logp"],
-                        mb["manager_adv"], mb["manager_ret"], mb["manager_value"], mb["manager_valid"], config,
+                        mb["manager_adv"], mb["manager_ret"], mb["manager_value"], mb["manager_valid"],
+                        mb["time_remaining"], config,
                     )
                 (loss_manager, manager_aux), grads_manager = jax.value_and_grad(m_loss, has_aux=True)(params['manager'])
                 manager_updates, new_manager_opt = manager_optimizer.update(
@@ -581,8 +607,10 @@ if __name__ == "__main__":
         carry, rollout_metrics = run_rollout_chunk(carry, keys)
 
         train_rng, next_key = jax.random.split(rng_key)
+        bootstrap_time_remaining = carry.commitment_left.astype(jnp.float32) / config['p_max']
         params, opt_state, update_metrics = ppo_update(
-            train_rng, carry.params, carry.opt_state, carry.buffer_state, carry.obs, carry.skills
+            train_rng, carry.params, carry.opt_state, carry.buffer_state, carry.obs, carry.skills,
+            bootstrap_time_remaining,
         )
 
         # Buffer contents were fully consumed; re-init for the next chunk.
@@ -660,7 +688,7 @@ if __name__ == "__main__":
         # policy_fn is stateless across steps, so persistence has to happen
         # outside this jitted step -- see eval_policy_fn below, matching
         # HIRO.py's eval_hier_state closure pattern).
-        act, new_skill, new_commitment, _, _, _, _, _, _ = select_hippo_action(
+        act, new_skill, new_commitment, _, _, _, _, _, _, _ = select_hippo_action(
             key=eval_key,
             obs=single_obs,
             commitment_left=commitment_left,
