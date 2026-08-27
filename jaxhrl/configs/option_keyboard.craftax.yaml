@@ -1,0 +1,40 @@
+experiment: option_keyboard_craftax
+seed: 42
+
+
+env:
+  framework: craftax
+  make:
+    id: Craftax-Symbolic-v1
+
+training:
+  n_steps: 1_000_000
+  num_envs: 1024
+  gamma: 0.99
+  eval_freq: 1000
+  cumulant_dim: 82  # 67 achievement flags + 15 dense stats (resources/intrinsics/floor)
+  num_options: 10
+  batch_size: 256
+  buffer_size: 400000
+  n_step: 3
+  priority_exponent: 0.6
+
+network:
+  encoder:
+    hidden_dim: 512
+  gru:
+    h_dim: 256
+
+save_json: true
+use_wandb: true
+use_mlflow: false
+
+eval:
+  enabled: True
+  interval_pct: 0.05 # evaluate at every 5%
+  max_steps: 4000 # max length of eval episode
+  num_runs: 10 # number of greedy eval episodes per eval stage
+
+checkpoint:
+  enabled: True
+  interval_pct: 0.2 # save a model checkpoint every 20% of training

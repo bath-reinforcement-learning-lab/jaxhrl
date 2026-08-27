@@ -1,0 +1,40 @@
+experiment: HiPPO_craftax
+seed: 42
+use_wandb: True
+save_json: True
+
+env:
+  framework: craftax
+  make:
+    id: brll/Craftax-Symbolic-v1
+    
+training:
+  num_steps: 1_000_000
+  num_envs: 1024
+  p_min: 8
+  p_max: 32
+  num_skills: 8
+  rollout_horizon: 128
+  gamma: 0.99
+  gae_lambda: 0.8
+  clip_eps: 0.2
+  entropy_coef: 0.01
+  value_coef: 0.5
+  max_grad_norm: 0.5
+  ppo_epochs: 4
+  num_minibatches: 8
+  lr_manager: 3.0e-4
+  lr_skill: 3.0e-4
+
+
+logger:
+  project: HiPPO-craftax
+  log_dir: ./logs
+
+eval:
+  enabled: True
+  interval_pct: 0.05 # write an eval metrics snapshot every 5%
+
+checkpoint:
+  enabled: True
+  interval_pct: 0.2 # save a model checkpoint every 20% of training

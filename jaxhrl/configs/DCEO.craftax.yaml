@@ -1,0 +1,34 @@
+experiment: DCEO_craftax
+seed: 42
+save_json: True
+use_wandb: True
+
+env:
+  framework: craftax
+  make:
+    id: Craftax-Symbolic-v1   # or Craftax-Classic-Symbolic-v1 for the classic variant
+
+training:
+  n_steps: 1_000_000
+  num_envs: 1024
+  num_options: 10
+  chunk_size: 2000
+  batch_size: 512
+  buffer_size: 400_000
+  epsilon: 0.2
+  mu: 0.9
+  D: 25
+
+logger:
+  project: dceo-craftax
+  log_dir: ./logs
+
+eval:
+  enabled: True
+  interval_pct: 0.05 # evaluate at every 5%
+  max_steps: 4000 # max length of eval episode
+  num_runs: 10 # number of greedy eval episodes per eval stage
+
+checkpoint:
+  enabled: True
+  interval_pct: 0.2 # save a model checkpoint every 20% of training
