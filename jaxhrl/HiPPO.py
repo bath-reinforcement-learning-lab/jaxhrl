@@ -647,6 +647,13 @@ if __name__ == "__main__":
         logger.log_metrics(chunk_metrics, step=env_steps0)
 
         num_skills = config['num_skills']
+        # Skill usage aggregated over the whole chunk (not per-timestep) -- this,
+        # together with chunk_metrics, is exactly what an eval-stage snapshot
+        # for this on-policy algorithm reports (see save_eval_metrics call site).
+        skill_usage = {f"skills/usage_{skill_idx}": float(np.mean(rollout_metrics["skills"] == skill_idx))
+                       for skill_idx in range(num_skills)}
+        skill_usage["skills/decision_rate"] = float(np.mean(rollout_metrics["decision_flag"]))
+
         for t in range(rollout_horizon):
             current_t_step = env_steps0 + (t * num_envs)
             t_metrics = {}
@@ -665,7 +672,7 @@ if __name__ == "__main__":
               f"| Manager Loss: {chunk_metrics['train/loss_manager']:.4f} "
               f"| True Return: {true_mean_return:.2f}")
 
-        return carry, next_key
+        return carry, next_key, {**chunk_metrics, **skill_usage}
 
 
     # Main Training Loop
@@ -673,81 +680,29 @@ if __name__ == "__main__":
 
     total_steps = config['num_steps']
 
+    # Evaluation / checkpoint scheduling -- see StepScheduler in common/utils.py.
+    # HiPPO is on-policy: its parallel rollout already reflects current policy
+    # performance, so an "eval stage" here just snapshots the metrics already
+    # computed by run_and_log (return mean, skill usage, losses, ...) to JSON
+    # instead of running separate greedy eval episodes.
+    from jaxhrl.common.utils import StepScheduler
     eval_config = config_raw.get("eval", {})
-    do_eval = eval_config.get("enabled", False)
-    eval_interval = int(total_steps * eval_config.get("interval_pct", 0.05))
-    eval_max_steps = eval_config.get("max_steps", 2000)
-    next_eval_step = eval_interval
-
-    @jax.jit
-    def greedy_eval_policy(eval_params, single_obs, commitment_left, skill, eval_key):
-        # Greedy manager + greedy skill; the time-commitment p is still
-        # sampled since it is a fixed hyperparameter distribution, not a
-        # learned quantity, so there is nothing to make "greedy" about it.
-        # commitment_left/skill are threaded in by the caller (run_eval_episode's
-        # policy_fn is stateless across steps, so persistence has to happen
-        # outside this jitted step -- see eval_policy_fn below, matching
-        # HIRO.py's eval_hier_state closure pattern).
-        act, new_skill, new_commitment, _, _, _, _, _, _, _ = select_hippo_action(
-            key=eval_key,
-            obs=single_obs,
-            commitment_left=commitment_left,
-            skill=skill,
-            manager_params=eval_params['manager'],
-            manager_net=manager_net,
-            skill_params=eval_params['skill'],
-            skill_net=skill_net,
-            config=config,
-            greedy=True,
-        )
-        return act, new_skill, new_commitment
+    checkpoint_config = config_raw.get("checkpoint", {})
+    eval_sched = StepScheduler(total_steps, eval_config.get("interval_pct", 0.05), eval_config.get("enabled", False))
+    ckpt_sched = StepScheduler(total_steps, checkpoint_config.get("interval_pct", 0.2), checkpoint_config.get("enabled", True))
 
     for step_idx in range(0, total_steps, rollout_horizon):
         key, chunk_key = jax.random.split(key)
-        carry, key = run_and_log(carry, chunk_key, step_idx)
+        carry, key, chunk_snapshot = run_and_log(carry, chunk_key, step_idx)
 
-        if do_eval and step_idx >= next_eval_step:
-            print(f"\n--- Running Evaluation at Step {step_idx} ---")
+        current_env_step = (step_idx + rollout_horizon) * num_envs
 
-            frozen_params = jax.device_get(carry.params)
-            current_env_step = (step_idx + rollout_horizon) * num_envs
+        if ckpt_sched.due(step_idx):
+            logger.save_checkpoint(jax.device_get(carry.params), current_env_step)
 
-            logger.save_checkpoint(frozen_params, current_env_step)
-
-            key, eval_key = jax.random.split(key)
-            from jaxhrl.common.wrappers import run_eval_episode
-
-            # run_eval_episode calls policy_fn(params, obs, key) with no
-            # persisted state, but the manager's decision must hold for
-            # commitment_left steps -- track commitment_left/skill across
-            # calls in a closure, reset fresh for this eval episode.
-            eval_hippo_state = {
-                "commitment_left": jnp.array(0, dtype=jnp.int32),
-                "skill": jnp.array(-1, dtype=jnp.int32),
-            }
-
-            def eval_policy_fn(eval_params, single_obs, step_eval_key):
-                action, new_skill, new_commitment = greedy_eval_policy(
-                    eval_params, single_obs,
-                    eval_hippo_state["commitment_left"], eval_hippo_state["skill"],
-                    step_eval_key,
-                )
-                eval_hippo_state["commitment_left"] = new_commitment - 1
-                eval_hippo_state["skill"] = new_skill
-                return action, new_skill
-
-            trajectory = run_eval_episode(
-                env_wrapper=env,
-                policy_fn=eval_policy_fn,
-                params=frozen_params,
-                key=eval_key,
-                max_steps=eval_max_steps,
-            )
-
-            logger.log_eval_trajectory(current_env_step, trajectory)
-
-            next_eval_step += eval_interval
-            print(f"--- Evaluation Complete. Total Reward: {sum(trajectory['reward']):.2f} ---\n")
+        if eval_sched.due(step_idx):
+            logger.save_eval_metrics(current_env_step, chunk_snapshot)
+            print(f"--- Eval snapshot written at Step {step_idx} (env step {current_env_step}) ---")
 
     print("Training completed.")
     logger.close()

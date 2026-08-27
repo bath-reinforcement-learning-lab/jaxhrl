@@ -2,15 +2,17 @@
 
 Scripts import the actual repo classes/functions (network
 architectures, loss functions, action-selection logic) directly from
-`jaxhrl/DCEO.py`, `jaxhrl/h-DQN.py`, and `jaxhrl/option_keyboard.py` via
-`repo_loader.py` — nothing about the algorithms themselves is reimplemented
-here. The only custom code is (1) small toy environments with known ground
-truth (FourRooms with exact Laplacian eigenvectors; the Kulkarni et al. toy
-stochastic chain; Barreto et al.'s own "Foraging World" domain) and (2) thin
+`jaxhrl/DCEO.py`, `jaxhrl/h-DQN.py`, `jaxhrl/option_keyboard.py`, and
+`jaxhrl/HiPPO.py` via `repo_loader.py` — nothing about the algorithms
+themselves is reimplemented here. The only custom code is (1) small toy
+environments with known ground truth or a deliberately controlled structure
+(FourRooms with exact Laplacian eigenvectors; the Kulkarni et al. toy
+stochastic chain; Barreto et al.'s own "Foraging World" domain; a small
+POMDP built to isolate HiPPO's time-commitment mechanism) and (2) thin
 training loops that call the repo's real loss functions.
 
 Reproduce with: `.venv/bin/python dceo_verify.py && .venv/bin/python hdqn_verify.py
-&& .venv/bin/python okeyboard_verify.py`
+&& .venv/bin/python okeyboard_verify.py && .venv/bin/python hippo_verify.py`
 (needs `jax flax optax flashbax numpy scipy matplotlib` — see `requirements.txt`).
 
 ---
@@ -151,3 +153,69 @@ we didn't chase this further.
 
 Artifacts: `results/ok_gpi_zeroshot.png`, `results/ok_sf_accuracy.png`,
 `results/okeyboard_verification_summary.json`, `okeyboard_run.log`.
+
+---
+
+## HiPPO — "Sub-Policy Adaptation for Hierarchical Reinforcement Learning" (Li, Florensa, Clavera & Abbeel, ICLR 2020)
+
+**Verdict: matches the paper's core claims.** Using the real
+`ManagerActorCritic`/`SkillActorCritic` networks, `select_hippo_action`,
+`compute_skill_gae`, `compute_manager_smdp_targets`, and
+`skill_loss_fn`/`manager_loss_fn` from `jaxhrl/HiPPO.py` directly, HiPPO
+reproduces the paper's time-commitment ablation (Section 5.2, Figure 3) and
+its skill-diversity/gradient-approximation diagnostic (Table 2).
+
+The paper's own test environments (Block Hopper/Half Cheetah, Snake/Ant
+Gather) are continuous-action MuJoCo robots; `HiPPO.py` is categorical-action
+only, so they aren't directly reproducible here. `sparse_compass.py` is a
+small custom POMDP built instead to isolate the specific mechanism the
+paper's own ablation demonstrates: a target direction is revealed in the
+observation for only the first couple of steps of each episode, then goes
+blank for the rest of a short, tight horizon — the only way to succeed is to
+read the brief cue and then keep acting on it after it disappears, which a
+persistent skill index can do (it carries the answer forward as memory) but
+a policy that redecides every step cannot (it has nothing left to condition
+on once the cue is gone).
+
+### Time-commitment ablation (Figure 3)
+
+Four conditions, all built from the exact same training loop and loss
+functions — only `num_skills`/`p_min`/`p_max` differ, mirroring the paper's
+own ablation structure exactly. 5 seeds, 400 iterations each:
+
+| condition | final mean episode return | 
+|---|---|
+| HiPPO, randomized period (p in [8,12]) | **1.000** |
+| HiPPO, fixed period (p=10) | **0.839** |
+| HiPPO, p=1 (ablation) | 0.248 |
+| Flat PPO (no hierarchy) | 0.248 |
+
+Both HiPPO variants (randomized and fixed period, each spanning the whole
+episode so the manager commits right when the cue is visible) solve the task
+outright. The p=1 ablation and flat PPO both converge — exactly as
+reliably as each other, across all 5 seeds — to 0.248, matching the
+theoretical ceiling of a policy with no persistent memory of the cue
+(1/4, one correct guess in four): with no way to carry the cue's information
+past the step it disappears, both degenerate to the same "commit to one
+global default action" strategy. See `results/hippo_learning_curves.png`.
+
+### Skill-diversity / gradient-approximation diagnostic (Table 2)
+
+Using the trained randomized-period policy, computed the same two
+quantities the paper reports in Table 2, restricted to the memory-driven
+portion of each commitment period (excluding the brief cue-visible window,
+where every skill correctly reacts to the same observable cue regardless of
+`z`, so it isn't part of what the skill-diversity assumption concerns):
+
+| quantity | this run | paper's own range |
+|---|---|---|
+| eps (max prob of the taken action under a different skill) | 0.0001 | ~0.09–0.13 |
+| cosine similarity, exact vs. approximate gradient | **0.999** | 0.94–0.98 |
+
+With skills fully differentiated (the task requires it), eps is even smaller
+than the paper's own reported values and the approximate gradient
+`skill_loss_fn` actually computes is essentially indistinguishable from the
+exact mixture-over-skills gradient (Eq. 3) — confirming Lemma 1's prediction
+that the approximation gets better as skills become more diverse.
+
+Artifacts: `results/hippo_learning_curves.png`, `results/hippo_verification_summary.json`.
