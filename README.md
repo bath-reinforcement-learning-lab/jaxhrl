@@ -76,8 +76,7 @@ training:
   # defaults.
 ```
 
-No example config YAMLs ship yet — check each script's `__main__` block for
-the exact keys it reads.
+[`jaxhrl/`](jaxhrl/configs/) contains example configs for craftax.
 
 ## Logging
 
