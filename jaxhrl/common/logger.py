@@ -28,16 +28,20 @@ class Logger:
         if not any((self.save_json, self.use_mlflow, self.use_wandb)):
             warnings.warn(f"No logging functionality has been enabled for experiment: {experiment_name}.", stacklevel=2)
 
+        # Persistent local results directory. This is created unconditionally
+        # (not just under save_json) because checkpoints and per-eval-stage
+        # JSON files are written to disk regardless of which remote backends
+        # (mlflow/wandb) are also enabled. It is intentionally distinct from
+        # the wandb scratch directory below, which is deleted on close().
+        self.experiment_path = os.path.join("results", experiment_name)
+        self.config_path = os.path.join(self.experiment_path, "config.yaml")
+
+        if os.path.isdir(self.experiment_path) and self.overwrite:
+            shutil.rmtree(self.experiment_path)
+
+        os.makedirs(self.experiment_path, exist_ok=True)
+
         if self.save_json:
-            self.experiment_path = os.path.join("results", experiment_name)
-            self.config_path = os.path.join(self.experiment_path, "config.yaml")
-
-            if os.path.isdir(self.experiment_path) and self.overwrite:
-                shutil.rmtree(self.experiment_path)
-
-            os.makedirs(self.experiment_path, exist_ok=True)
-
-
             if os.path.isfile(self.config_path) and not self.overwrite:
                 with open(self.config_path) as file:
                     existing_config = yaml.safe_load(file)
@@ -78,9 +82,14 @@ class Logger:
                 else:
                     raise e
 
-            # for temporary video saving
-            self.experiment_path = os.path.join("results", experiment_name + uuid.uuid4().hex)
-            os.makedirs(self.experiment_path, exist_ok=True)
+            # Scratch dir for temporary video artifacts only -- kept separate
+            # from self.experiment_path (which now always holds the durable
+            # checkpoints/eval-json/metrics output) since this one is deleted
+            # in close(). Previously this reassigned self.experiment_path
+            # itself, which meant enabling both save_json and use_wandb
+            # silently deleted the metrics JSON on close().
+            self._wandb_scratch_path = os.path.join("results", experiment_name + "_wandb_" + uuid.uuid4().hex)
+            os.makedirs(self._wandb_scratch_path, exist_ok=True)
 
     def log_metrics(self, metrics: dict, step: int | None = None) -> None:
         if self.save_json:
@@ -115,7 +124,7 @@ class Logger:
             else:
                 raise RuntimeError(f"MLflow artifact URI is not a file path: {uri}. get_artifact_path() requires extending to handle this.")  # fmt: off
         if self.use_wandb:
-            return self.experiment_path  
+            return self._wandb_scratch_path
         else:
             raise RuntimeError("No logging functionality has been enabled. Use either save_json or use_mlflow.")
 
@@ -138,33 +147,75 @@ class Logger:
 
         if self.use_wandb:
             wandb.finish()
-            shutil.rmtree(self.experiment_path)  # clean up temporary video directory
+            shutil.rmtree(self._wandb_scratch_path)  # clean up temporary video directory
 
 
     def save_checkpoint(self, params: dict, step: int) -> None:
-        """Serializes JAX PyTree parameters and saves them as a W&B Artifact."""
-        if not self.use_wandb:
-            return
-            
+        """Serializes JAX PyTree parameters to a local msgpack file under
+        results/<experiment>/checkpoints/, and additionally uploads it as a
+        W&B Artifact if use_wandb is enabled. Local saving happens
+        unconditionally -- callers decide how often to invoke this (e.g. an
+        interval-based checkpoint schedule), not this method."""
         import flax.serialization
-        
-        # Create a local directory for this specific checkpoint
-        ckpt_dir = os.path.join(self.experiment_path, f"checkpoint_{step}")
+
+        ckpt_dir = os.path.join(self.experiment_path, "checkpoints")
         os.makedirs(ckpt_dir, exist_ok=True)
-        
-        # Serialize the frozen params to msgpack
-        ckpt_path = os.path.join(ckpt_dir, "params.msgpack")
+
+        ckpt_path = os.path.join(ckpt_dir, f"checkpoint_{step}.msgpack")
         with open(ckpt_path, "wb") as f:
             f.write(flax.serialization.to_bytes(params))
-            
-        # Upload to W&B
+
+        if not self.use_wandb:
+            return
+
         artifact = wandb.Artifact(
-            name=f"{self.config.get('experiment', 'run')}_model", 
-            type="model", 
+            name=f"{self.config.get('experiment', 'run')}_model",
+            type="model",
             metadata={"step": step}
         )
         artifact.add_file(ckpt_path)
         wandb.log_artifact(artifact)
+
+    def save_eval_returns(self, step: int, returns: list) -> str:
+        """For off-policy algorithms: writes the per-episode returns from one
+        eval stage (e.g. 10 greedy rollouts) to results/<experiment>/evals/eval_<step>.json,
+        and logs the mean/std/min/max to W&B."""
+        returns = [float(r) for r in returns]
+        mean = float(sum(returns) / len(returns)) if returns else 0.0
+        payload = {
+            "step": step,
+            "num_runs": len(returns),
+            "returns": returns,
+            "mean": mean,
+        }
+        if self.use_wandb and returns:
+            std = float((sum((r - mean) ** 2 for r in returns) / len(returns)) ** 0.5)
+            wandb.log(
+                {
+                    "eval/return_mean": mean,
+                    "eval/return_std": std,
+                    "eval/return_min": min(returns),
+                    "eval/return_max": max(returns),
+                },
+                step=step,
+            )
+        return self._write_eval_json(step, payload)
+
+    def save_eval_metrics(self, step: int, metrics: dict) -> str:
+        """For on-policy algorithms: writes a snapshot of the metrics already
+        being tracked for this chunk (return mean, skill/option usage, etc.)
+        to results/<experiment>/evals/eval_<step>.json, instead of running
+        separate eval episodes."""
+        payload = {"step": step, **metrics}
+        return self._write_eval_json(step, payload)
+
+    def _write_eval_json(self, step: int, payload: dict) -> str:
+        eval_dir = os.path.join(self.experiment_path, "evals")
+        os.makedirs(eval_dir, exist_ok=True)
+        path = os.path.join(eval_dir, f"eval_{step}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, sort_keys=True, indent=4)
+        return path
 
     def log_eval_trajectory(self, step: int, trajectory: dict, frames: list = None) -> None:
         """Logs a per-timestep trajectory table and optional video to W&B."""
