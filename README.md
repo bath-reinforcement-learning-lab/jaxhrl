@@ -17,17 +17,19 @@ Our implementations run very fast. HiPPO runs at ~73000 env-steps/s on a single 
 
 | Algorithm | Paper | Status |
 |---|---|---|
-| [DCEO](jaxhrl/DCEO.py) | Klissarov & Machado, *"Deep Laplacian-based Options for Temporally-Extended Exploration"* (ICML 2023) | ✅ Verified — the Laplacian representation correctly recovers the true graph eigenvectors |
-| [h-DQN](jaxhrl/h-DQN.py) | Kulkarni et al., *"Hierarchical Deep Reinforcement Learning: Integrating Temporal Abstraction and Intrinsic Motivation"* (2016) | ✅ Verified — matches the paper's own toy-MDP result |
-| [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | ✅ GPI's zero-shot skill combination matches the paper's own worked example |
-| [HiPPO](jaxhrl/HiPPO.py) | Li, Florensa, Clavera & Abbeel, *"Sub-Policy Adaptation for Hierarchical Reinforcement Learning"* (ICLR 2020) | ✅ Verified — reproduces the paper's own time-commitment ablation and skill-diversity diagnostic |
-| [option_critic](jaxhrl/option_critic.py) | Bacon, Harb & Precup, *"The Option-Critic Architecture"* (AAAI 2017) | ✅ Verified — reproduces the paper's four-rooms transfer direction (Figure 3, options recover faster after the goal moves) and option specialization (Figure 4) |
+| [DCEO](jaxhrl/DCEO.py) | Klissarov & Machado, *"Deep Laplacian-based Options for Temporally-Extended Exploration"* (ICML 2023) | Verified — the Laplacian representation correctly recovers the true graph eigenvectors |
+| [h-DQN](jaxhrl/h-DQN.py) | Kulkarni et al., *"Hierarchical Deep Reinforcement Learning: Integrating Temporal Abstraction and Intrinsic Motivation"* (2016) | Verified — matches the paper's own toy-MDP result |
+| [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | GPI's zero-shot skill combination matches the paper's own worked example |
+| [HiPPO](jaxhrl/HiPPO.py) | Li, Florensa, Clavera & Abbeel, *"Sub-Policy Adaptation for Hierarchical Reinforcement Learning"* (ICLR 2020) | Verified — reproduces the paper's own time-commitment ablation and skill-diversity diagnostic |
+| [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | Partially verified — 2-level HAC reproduces the paper's sample-efficiency claim over a flat agent (2.7x fewer steps); the 3-level claim does not reproduce |
+| [option_critic](jaxhrl/option_critic.py) | Bacon, Harb & Precup, *"The Option-Critic Architecture"* (AAAI 2017) |  Verified — reproduces the paper's four-rooms transfer direction (Figure 3, options recover faster after the goal moves) and option specialization (Figure 4) |
+| [MOC](jaxhrl/MOC.py) | Klissarov & Precup, *"Flexible Option Learning"* (NeurIPS 2021) |  Verified — reproduces the paper's four-rooms result (Figure 1b): multi-updating recovers from the goal relocation far faster than vanilla Option-Critic and with ~10x lower seed variance |
 
 ## Verification
 
 [`verification/`](verification/)
 contains standalone scripts that import each algorithm's actual network and
-loss code and test it against toy environments from the original papers.. Full write-ups, plots, and numbers are in
+loss code and test it against toy environments from the original papers. Full write-ups, plots, and numbers are in
 [`verification/REPORT.md`](verification/REPORT.md). Summary:
 
 - **DCEO**: the Laplacian representation network recovers the true graph
@@ -61,9 +63,17 @@ loss code and test it against toy environments from the original papers.. Full w
   superimposed on a flat actor-critic built from the same code path with
   `num_options=1`), and after the goal is relocated the Option-Critic agents
   recover faster (post-switch AUC 0.51 / 0.56 for 4 / 8 options vs 0.42 flat,
-  16 seeds), though with high seed variance. The learned options partition the
+  16 seeds). The learned options partition the
   grid into spatially-coherent regions (Figure 4).
-- HIRO: **TODO**.
+- **MOC** (*Flexible Option Learning*): reproduced the paper's four-rooms
+  Figure 1b on the same task and harness as the Option-Critic check above,
+  swapping only the loss function. Learning the initial task from scratch, all
+  of flat / OC / MOC converge together; after the goal is relocated MOC
+  recovers to 0.99 return while OC reaches 0.80 and a flat agent 0.56 in the
+  same budget, and MOC's final-return seed std is 0.01 vs OC's 0.13 (16 seeds,
+  all 16 MOC seeds recover vs 8/16 OC). MOC does this by leaning on fewer
+  options (usage entropy 0.14 vs OC's 0.99) — the diversity/performance
+  trade-off the paper's η hyperparameter is meant to control.
 
 Rerun any check with e.g. `python verification/dceo_verify.py`.
 
