@@ -1,0 +1,8 @@
+flashbax==0.1.3
+flax==0.12.9
+jax==0.11.1
+jaxlib==0.11.1
+matplotlib==3.11.1
+numpy==2.5.2
+optax==0.2.8
+scipy==1.18.0
