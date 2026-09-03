@@ -2,17 +2,25 @@
 
 Scripts import the actual repo classes/functions (network
 architectures, loss functions, action-selection logic) directly from
-`jaxhrl/DCEO.py`, `jaxhrl/h-DQN.py`, `jaxhrl/option_keyboard.py`, and
-`jaxhrl/HiPPO.py` via `repo_loader.py` — nothing about the algorithms
-themselves is reimplemented here. The only custom code is (1) small toy
-environments with known ground truth or a deliberately controlled structure
-(FourRooms with exact Laplacian eigenvectors; the Kulkarni et al. toy
+`jaxhrl/DCEO.py`, `jaxhrl/h-DQN.py`, `jaxhrl/option_keyboard.py`,
+`jaxhrl/HiPPO.py`, `jaxhrl/option_critic.py` and `jaxhrl/HAC.py` via
+`repo_loader.py` — nothing
+about the algorithms themselves is reimplemented here. The only custom code is
+(1) small toy environments with known ground truth or a deliberately controlled
+structure (FourRooms with exact Laplacian eigenvectors; the Kulkarni et al. toy
 stochastic chain; Barreto et al.'s own "Foraging World" domain; a small
-POMDP built to isolate HiPPO's time-commitment mechanism) and (2) thin
-training loops that call the repo's real loss functions.
+POMDP built to isolate HiPPO's time-commitment mechanism; the Option-Critic
+paper's own four-rooms navigation task with a relocatable goal; a continuous
+four-rooms point mass standing in for Levy et al.'s ant four rooms) and (2)
+thin training loops that call the repo's real loss functions. HAC is the
+exception and goes further than the others: `hac_verify.py` executes the repo's
+real `__main__` training loop via `runpy` against a patched environment
+factory, so its entire scan body — level scheduler, hindsight transitions,
+replay — is what runs, not a reimplementation.
 
 Reproduce with: `.venv/bin/python dceo_verify.py && .venv/bin/python hdqn_verify.py
-&& .venv/bin/python okeyboard_verify.py && .venv/bin/python hippo_verify.py`
+&& .venv/bin/python okeyboard_verify.py && .venv/bin/python hippo_verify.py
+&& .venv/bin/python option_critic_verify.py && .venv/bin/python hac_verify.py`
 (needs `jax flax optax flashbax numpy scipy matplotlib` — see `requirements.txt`).
 
 ---
@@ -219,3 +227,72 @@ exact mixture-over-skills gradient (Eq. 3) — confirming Lemma 1's prediction
 that the approximation gets better as skills become more diverse.
 
 Artifacts: `results/hippo_learning_curves.png`, `results/hippo_verification_summary.json`.
+
+---
+
+## Option-Critic — "The Option-Critic Architecture" (Bacon, Harb & Precup, AAAI 2017)
+
+**Verdict: matches the paper's core four-rooms claims.** Using the real
+`OptionCriticNetwork`, `batch_select_option_critic_action` and
+`option_critic_loss_fn` from `jaxhrl/option_critic.py` directly, Option-Critic
+(1) learns the stationary four-rooms navigation task exactly as fast as a flat
+actor-critic, (2) recovers faster than that flat baseline after the goal is
+relocated (the paper's Figure 3 transfer result), and (3) organises the state
+space into spatially-coherent per-option regions (Figure 4).
+
+`fourrooms_nav.py` is the paper's own 13×13 four-rooms with its 1/3 action
+noise, a +1 terminating goal reward, and γ=0.99. Following the paper's transfer
+setup, the goal starts in the east doorway (a bottleneck, so options that learn
+to reach it stay reusable) and relocates into the lower-right room after 1M
+env-steps. The flat baseline is the *identical code path* with `num_options=1`,
+which collapses the option machinery to a one-step advantage actor-critic — the
+same way `hippo_verify.py` derives its flat baseline from `num_skills=1`.
+Training is on-policy (fresh rollouts fed straight through the repo's real
+`option_critic_loss_fn` — TD critic target, intra-option policy gradient, and
+the termination gradient of Bacon et al. eq. 4), matching Option-Critic's
+on-policy actor-critic updates. 16 seeds.
+
+### Non-stationary transfer (Figure 3)
+
+Mean episode return (= goal-reach rate), 16 seeds. Post-switch columns are the
+mean return that many env-steps after the goal moves:
+
+| condition | pre-switch | post-switch AUC | +0.5M | +1.0M | +1.5M | final (+2.0M) |
+|---|---|---|---|---|---|---|
+| Flat actor-critic (1 option) | 1.00 | 0.42 | 0.19 | 0.43 | 0.55 | 0.78 |
+| **Option-Critic (4 options)** | 1.00 | **0.51** | 0.23 | **0.56** | **0.76** | **0.86** |
+| Option-Critic (8 options) | 1.00 | **0.56** | 0.40 | 0.63 | 0.69 | 0.79 |
+
+All three solve the stationary task at the same rate — the return curves are
+superimposed up to the relocation line, reproducing Figure 3's phase-1 claim
+that adding options costs nothing. After the goal moves, both Option-Critic
+variants recover ahead of the flat baseline for essentially the whole 2M-step
+window (post-switch AUC 0.51 / 0.56 vs 0.42, roughly 1.5–2 standard errors
+apart; standard-error bands on the curves mostly disjoint through ~1.3–2.6M).
+The flat baseline closes the gap only near the end of the budget. Seed
+variance is high for every condition — 4–5 of 16 seeds in each are slow to
+re-explore their way to the relocated goal — so this is a modest reproduction
+of Figure 3's direction rather than a large margin. See
+`results/option_critic_transfer_curves.png`.
+
+The recovery advantage is option-level exploration: ε-greedy selection over
+`Q_Omega` commits to a whole option for an episode, giving the directed,
+temporally-extended exploration the paper credits options with, where the flat
+policy's only exploration is per-step softmax noise — random walks that seldom
+reach a goal a room away from the old one.
+
+### Option specialization (Figure 4)
+
+Sweeping every state through the trained 4-option network: the greedy option
+per state is spatially coherent — `greedy_option_spatial_coherence` = 0.79 vs
+0.25 for a random option assignment — so options own contiguous regions of the
+grid (`results/option_critic_options.png`). The option *value* function
+`Q_Omega` is doing this partitioning work; the termination head meanwhile
+drives β→0 (options run until the episode ends) and the intra-option policies
+stay close (mean pairwise action-distribution TV ≈ 0.05), the known
+Option-Critic tendency for options to under-differentiate without stronger
+regularisation than `delib_cost` provides.
+
+Artifacts: `results/option_critic_transfer_curves.png`,
+`results/option_critic_options.png`,
+`results/option_critic_verification_summary.json`, `results/option_critic_run.log`.
