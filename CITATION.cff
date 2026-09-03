@@ -1,0 +1,6 @@
+@software{Miller_jaxhrl_2026,
+  author = {Samuel Miller},
+  title = {[jaxhrl]: JAX Implementations of Hierarchical RL Algorithms},
+  url = {https://github.com/bath-reinforcement-learning-lab/jaxhrl/},
+  year = {2026}
+}
