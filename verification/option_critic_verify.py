@@ -1,12 +1,6 @@
 """
 Option-Critic empirical verification.
 
-Uses the ACTUAL `OptionCriticNetwork`, `batch_select_option_critic_action`,
-and `option_critic_loss_fn` imported straight from `jaxhrl/option_critic.py`
-via `repo_loader.py` -- the network, the call-and-return option selection, the
-intra-option policy-gradient actor loss, the Q_Omega critic loss and the
-termination gradient (Bacon et al. eq. 4) are all the repo's own code,
-unchanged.
 
 The training loop here is on-policy (fresh rollouts, a few gradient epochs per
 rollout, slow target-net tracking) rather than `option_critic.py`'s own
@@ -23,10 +17,7 @@ Precup, AAAI 2017, Section 5.1):
   Test A -- non-stationary transfer (Figure 3): train to reach one goal, then
     relocate the goal to a different room and keep training. The flat baseline
     is the SAME code path with `num_options=1` (which collapses the option
-    machinery to a plain advantage actor-critic) -- exactly how
-    `hippo_verify.py` gets its "Flat PPO" baseline from `num_skills=1`.
-    Learning curves (episode return and steps-per-episode vs env-step, with
-    the relocation marked) are plotted for every condition.
+    machinery to a plain advantage actor-critic).
 
   Test B -- option specialization (Figure 4): sweep every state through the
     trained multi-option network and measure how the options carve up the
@@ -53,7 +44,7 @@ import fourrooms_nav as frn
 RESULTS_DIR = Path(__file__).parent / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
 
-SEEDS = list(range(16))        # the transfer gap has high seed variance -- needs many
+SEEDS = list(range(16))       
 NUM_ENVS = 128
 ROLLOUT = 32                    # env-steps per on-policy iteration
 HIDDEN_DIM = 128
