@@ -158,6 +158,8 @@ class Logger:
         interval-based checkpoint schedule), not this method."""
         import flax.serialization
 
+        params = _to_serialisable(params)
+
         ckpt_dir = os.path.join(self.experiment_path, "checkpoints")
         os.makedirs(ckpt_dir, exist_ok=True)
 
@@ -244,3 +246,22 @@ class Logger:
                 frames_arr = np.transpose(frames_arr, (0, 3, 1, 2))
                 
             wandb.log({f"eval/video": wandb.Video(frames_arr, fps=15, format="mp4")}, step=step)
+
+
+def _to_serialisable(params):
+    """msgpack cannot encode an `nnx.State`, so flax.serialization.to_bytes
+    raises on the state that every flax.nnx algorithm here carries through its
+    scan. Convert any State (including ones nested in the per-level tuples/
+    lists that a multi-level hierarchy passes) into a plain dict first."""
+    try:
+        from flax import nnx
+    except ImportError:
+        return params
+
+    if isinstance(params, nnx.State):
+        return nnx.to_pure_dict(params)
+    if isinstance(params, dict):
+        return {k: _to_serialisable(v) for k, v in params.items()}
+    if isinstance(params, (list, tuple)):
+        return [_to_serialisable(v) for v in params]
+    return params

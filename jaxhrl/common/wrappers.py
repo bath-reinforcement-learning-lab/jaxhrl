@@ -236,8 +236,11 @@ def make_jax_env(framework: str, env_id: str, cumulant_dim: int, goal_threshold:
             # `key` is accepted (unused) only to match every other branch's
             # (key, state, action) -> (obs, state, reward, done, info) signature.
             next_state = brax_env.step(state, action)
+            # brax envs return `done` as a plain Python float when termination
+            # is disabled (e.g. ant with terminate_when_unhealthy=False, see
+            # brax/envs/ant.py), so asarray before astype.
             return (next_state.obs, next_state, next_state.reward,
-                   next_state.done.astype(bool), next_state.info)
+                   jnp.asarray(next_state.done).astype(bool), next_state.info)
 
         return JaxWrappedEnv(brax_env, None, state_dim, 0, reset_fn, step_fn,
                               cumulant_fn, None, 0, None, None, None,

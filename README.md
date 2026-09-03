@@ -11,6 +11,8 @@ in [`jaxhrl/common/wrappers.py`](jaxhrl/common/wrappers.py) needs adjusting
 to expose that environment's `reset_fn`/`step_fn`/observation and action
 shapes in the form each algorithm expects.
 
+Our implementations run very fast. HiPPO runs at ~73000 env-steps/s on a single NVIDIA GeForce RTX 4090.
+
 ## Algorithms
 
 | Algorithm | Paper | Status |
@@ -19,9 +21,9 @@ shapes in the form each algorithm expects.
 | [h-DQN](jaxhrl/h-DQN.py) | Kulkarni et al., *"Hierarchical Deep Reinforcement Learning: Integrating Temporal Abstraction and Intrinsic Motivation"* (2016) | ✅ Verified — matches the paper's own toy-MDP result |
 | [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | ✅ GPI's zero-shot skill combination matches the paper's own worked example |
 | [HiPPO](jaxhrl/HiPPO.py) | Li, Florensa, Clavera & Abbeel, *"Sub-Policy Adaptation for Hierarchical Reinforcement Learning"* (ICLR 2020) | ✅ Verified — reproduces the paper's own time-commitment ablation and skill-diversity diagnostic |
-| [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | 🚧 Stub — not yet implemented |
+| [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | 🟡 Partially verified — 2-level HAC reproduces the paper's sample-efficiency claim over a flat agent (2.7x fewer steps); the 3-level claim does not reproduce |
 | [HIRO](jaxhrl/HIRO.py) | Nachum et al., *"Data-Efficient Hierarchical Reinforcement Learning"* | 🚧 Stub — not yet implemented |
-| [option_critic](jaxhrl/option_critic.py) | Bacon, Harb & Precup, *"The Option-Critic Architecture"* | 🚧 Stub — not yet implemented |
+| [option_critic](jaxhrl/option_critic.py) | Bacon, Harb & Precup, *"The Option-Critic Architecture"* (AAAI 2017) | ✅ Verified — reproduces the paper's four-rooms transfer direction (Figure 3, options recover faster after the goal moves) and option specialization (Figure 4) |
 
 ## Verification
 
@@ -46,7 +48,24 @@ loss code and test it against toy environments from the original papers.. Full w
   PPO both plateau at the same no-memory ceiling, and the approximate vs.
   exact policy gradient stay in the same close-agreement regime the paper
   reports.
-- HAC / HIRO / option_critic: **TODO**.
+- **HAC**: partially verified. On a continuous Four Rooms task with the
+  episode budget held identical across arms, 2-level HAC reaches 50% success
+  2.7x faster and 80% success 2.2x faster than a flat agent — the paper's
+  sample-efficiency claim. The 3-level claim does **not** reproduce, and the
+  cause is open: two candidate explanations (per-level horizon allocation, and
+  level-0 reach margin) were each tested and neither survived. The machinery
+  itself is sound at every depth — 1/2/3-level agents reach 1.000/0.998/0.955
+  success on an open point-mass, and the DDPG core recovers a known-optimal Q
+  function in isolation — so what is unverified is the paper's *advantage* from
+  a third level, not the third level working at all.
+- **Option-Critic**: reproduced Bacon et al.'s four-rooms transfer test
+  (Figure 3) — options cost nothing on the stationary task (learning curves
+  superimposed on a flat actor-critic built from the same code path with
+  `num_options=1`), and after the goal is relocated the Option-Critic agents
+  recover faster (post-switch AUC 0.51 / 0.56 for 4 / 8 options vs 0.42 flat,
+  16 seeds), though with high seed variance. The learned options partition the
+  grid into spatially-coherent regions (Figure 4).
+- HIRO: **TODO**.
 
 Rerun any check with e.g. `python verification/dceo_verify.py`.
 

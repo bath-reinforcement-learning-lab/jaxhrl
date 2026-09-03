@@ -2,17 +2,25 @@
 
 Scripts import the actual repo classes/functions (network
 architectures, loss functions, action-selection logic) directly from
-`jaxhrl/DCEO.py`, `jaxhrl/h-DQN.py`, `jaxhrl/option_keyboard.py`, and
-`jaxhrl/HiPPO.py` via `repo_loader.py` — nothing about the algorithms
-themselves is reimplemented here. The only custom code is (1) small toy
-environments with known ground truth or a deliberately controlled structure
-(FourRooms with exact Laplacian eigenvectors; the Kulkarni et al. toy
+`jaxhrl/DCEO.py`, `jaxhrl/h-DQN.py`, `jaxhrl/option_keyboard.py`,
+`jaxhrl/HiPPO.py`, `jaxhrl/option_critic.py` and `jaxhrl/HAC.py` via
+`repo_loader.py` — nothing
+about the algorithms themselves is reimplemented here. The only custom code is
+(1) small toy environments with known ground truth or a deliberately controlled
+structure (FourRooms with exact Laplacian eigenvectors; the Kulkarni et al. toy
 stochastic chain; Barreto et al.'s own "Foraging World" domain; a small
-POMDP built to isolate HiPPO's time-commitment mechanism) and (2) thin
-training loops that call the repo's real loss functions.
+POMDP built to isolate HiPPO's time-commitment mechanism; the Option-Critic
+paper's own four-rooms navigation task with a relocatable goal; a continuous
+four-rooms point mass standing in for Levy et al.'s ant four rooms) and (2)
+thin training loops that call the repo's real loss functions. HAC is the
+exception and goes further than the others: `hac_verify.py` executes the repo's
+real `__main__` training loop via `runpy` against a patched environment
+factory, so its entire scan body — level scheduler, hindsight transitions,
+replay — is what runs, not a reimplementation.
 
 Reproduce with: `.venv/bin/python dceo_verify.py && .venv/bin/python hdqn_verify.py
-&& .venv/bin/python okeyboard_verify.py && .venv/bin/python hippo_verify.py`
+&& .venv/bin/python okeyboard_verify.py && .venv/bin/python hippo_verify.py
+&& .venv/bin/python option_critic_verify.py && .venv/bin/python hac_verify.py`
 (needs `jax flax optax flashbax numpy scipy matplotlib` — see `requirements.txt`).
 
 ---
@@ -67,6 +75,91 @@ Artifacts: `results/dceo_eigenvectors_beta1.png`,
 `results/dceo_eigenvectors_beta0_ablation.png`,
 `results/dceo_loss_and_collapse.png`, `results/dceo_verification_summary.json`,
 `dceo_run.log`.
+
+---
+
+## HAC — "Learning Multi-Level Hierarchies with Hindsight" (Levy et al. 2019)
+
+**Verdict: partially verified.** The implementation's machinery is correct at
+every depth, and the paper's sample-efficiency claim reproduces for a
+**two-level** hierarchy: 2-level HAC reaches 50% success 2.7x faster and 80%
+success 2.2x faster than a flat agent on the same task with the same episode
+budget. The paper's **three-level** claim does **not** reproduce here, and the
+cause is not established.
+
+Everything below runs the repo's real `jaxhrl/HAC.py` training loop — the level
+scheduler, hindsight action transitions, hindsight goal relabelling,
+subgoal-testing penalties and per-level DDPG updates. `hac_verify.py`
+monkeypatches `make_jax_env` and executes the actual `__main__` via `runpy`;
+only the environment and the harness are custom.
+
+### DDPG core, against a known optimum
+
+A bandit whose true Q is maximised at a = 0.5, using the repo's real `Actor`,
+`Critic`, `critic_loss_fn`, `actor_loss_fn` and `train_level_step`:
+
+| | a = -1.0 | -0.5 | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|---|---|
+| learned Q | -5.62 | -2.53 | -0.64 | -0.05 | -0.63 |
+| true Q | -5.62 | -2.50 | -0.62 | -0.00 | -0.62 |
+
+The critic recovers the true Q function (final loss 3.5e-4), the actor ascends
+it to 0.418 against an optimum of 0.5, and Polyak updates propagate to the
+target network. The DDPG core is sound independently of the hierarchy.
+
+### The hierarchy learns at every depth
+
+On an open 2D point-mass goal-reaching task, end-goal success reaches **1.000 /
+0.998 / 0.955** at 1 / 2 / 3 levels, with every level's critic converging. The
+scheduler, relabelling and replay path all function at full depth.
+
+### Depth sweep — continuous Four Rooms
+
+`pointmaze.py`: a point mass in four rooms joined by doorways, always starting
+in the bottom-left room with the end goal sampled arena-wide, so most goals
+require routing through doorways. The step size (0.01) makes crossing the arena
+take ~200 steps, so the 729-step episode is necessary rather than generous —
+the long-horizon sparse-reward regime the paper's claim concerns. Dynamics are
+deliberately trivial so nothing about motor control confounds the measurement.
+
+Every arm gets an identical 729-step episode budget (H_levels = [729] /
+[27,27] / [9,9,9]) and the log chunk equals the horizon, so each point
+aggregates exactly one episode per environment.
+
+| arm | final success | env-steps to 0.5 | to 0.8 |
+|---|---|---|---|
+| flat (k=1) | 0.862 | 1,492,992 | 2,612,736 |
+| **2-level HAC** | **0.898** | **559,872** | **1,213,056** |
+| 3-level HAC | 0.015 | never | never |
+| 3-level, no subgoal testing | 0.000 | never | never |
+
+The 2-level result is the paper's claim: same task, same episode budget, 2.7x
+fewer environment steps to 50% success and 2.2x fewer to 80%.
+
+### What does not reproduce
+
+Three levels fails on this benchmark, and the reason is open. Two candidate
+explanations were tested and neither survived:
+
+- *Per-level horizon allocation.* HAC.py supports both a uniform per-level
+  budget and Levy's allocation (sub-levels fixed, top level absorbing the
+  remainder) via the `horizon` config key. Results depend strongly on the
+  choice — at k=2, [27,27] gives 0.898 but [9,81] gives 0.032 — but no
+  allocation rescues k=3.
+- *Level-0 reach margin.* Every working configuration had level-0 reach >= 9x
+  the goal threshold and both failing ones had 3x, suggesting the deepest arm
+  simply could not place reachable subgoals. Re-running k=3 at 9x margin did
+  not recover it (0.000-0.023). That test also shrank the end goal by the same
+  factor, so it is closer to inconclusive than to a clean refutation.
+
+Since the same 3-level agent solves the open point-mass at 0.955, the depth
+machinery works; what is unverified is that it delivers the paper's advantage
+on a long-horizon maze. Testing k=3 at the margin that works for k=2 requires
+a 27**3 ~ 19,700-step horizon, 27x more compute per episode than these CPU
+runs allow, which is the natural next step on a GPU.
+
+Artifacts: `results/hac_levels_comparison.png`,
+`results/hac_verification_summary.json`.
 
 ---
 
@@ -219,3 +312,72 @@ exact mixture-over-skills gradient (Eq. 3) — confirming Lemma 1's prediction
 that the approximation gets better as skills become more diverse.
 
 Artifacts: `results/hippo_learning_curves.png`, `results/hippo_verification_summary.json`.
+
+---
+
+## Option-Critic — "The Option-Critic Architecture" (Bacon, Harb & Precup, AAAI 2017)
+
+**Verdict: matches the paper's core four-rooms claims.** Using the real
+`OptionCriticNetwork`, `batch_select_option_critic_action` and
+`option_critic_loss_fn` from `jaxhrl/option_critic.py` directly, Option-Critic
+(1) learns the stationary four-rooms navigation task exactly as fast as a flat
+actor-critic, (2) recovers faster than that flat baseline after the goal is
+relocated (the paper's Figure 3 transfer result), and (3) organises the state
+space into spatially-coherent per-option regions (Figure 4).
+
+`fourrooms_nav.py` is the paper's own 13×13 four-rooms with its 1/3 action
+noise, a +1 terminating goal reward, and γ=0.99. Following the paper's transfer
+setup, the goal starts in the east doorway (a bottleneck, so options that learn
+to reach it stay reusable) and relocates into the lower-right room after 1M
+env-steps. The flat baseline is the *identical code path* with `num_options=1`,
+which collapses the option machinery to a one-step advantage actor-critic — the
+same way `hippo_verify.py` derives its flat baseline from `num_skills=1`.
+Training is on-policy (fresh rollouts fed straight through the repo's real
+`option_critic_loss_fn` — TD critic target, intra-option policy gradient, and
+the termination gradient of Bacon et al. eq. 4), matching Option-Critic's
+on-policy actor-critic updates. 16 seeds.
+
+### Non-stationary transfer (Figure 3)
+
+Mean episode return (= goal-reach rate), 16 seeds. Post-switch columns are the
+mean return that many env-steps after the goal moves:
+
+| condition | pre-switch | post-switch AUC | +0.5M | +1.0M | +1.5M | final (+2.0M) |
+|---|---|---|---|---|---|---|
+| Flat actor-critic (1 option) | 1.00 | 0.42 | 0.19 | 0.43 | 0.55 | 0.78 |
+| **Option-Critic (4 options)** | 1.00 | **0.51** | 0.23 | **0.56** | **0.76** | **0.86** |
+| Option-Critic (8 options) | 1.00 | **0.56** | 0.40 | 0.63 | 0.69 | 0.79 |
+
+All three solve the stationary task at the same rate — the return curves are
+superimposed up to the relocation line, reproducing Figure 3's phase-1 claim
+that adding options costs nothing. After the goal moves, both Option-Critic
+variants recover ahead of the flat baseline for essentially the whole 2M-step
+window (post-switch AUC 0.51 / 0.56 vs 0.42, roughly 1.5–2 standard errors
+apart; standard-error bands on the curves mostly disjoint through ~1.3–2.6M).
+The flat baseline closes the gap only near the end of the budget. Seed
+variance is high for every condition — 4–5 of 16 seeds in each are slow to
+re-explore their way to the relocated goal — so this is a modest reproduction
+of Figure 3's direction rather than a large margin. See
+`results/option_critic_transfer_curves.png`.
+
+The recovery advantage is option-level exploration: ε-greedy selection over
+`Q_Omega` commits to a whole option for an episode, giving the directed,
+temporally-extended exploration the paper credits options with, where the flat
+policy's only exploration is per-step softmax noise — random walks that seldom
+reach a goal a room away from the old one.
+
+### Option specialization (Figure 4)
+
+Sweeping every state through the trained 4-option network: the greedy option
+per state is spatially coherent — `greedy_option_spatial_coherence` = 0.79 vs
+0.25 for a random option assignment — so options own contiguous regions of the
+grid (`results/option_critic_options.png`). The option *value* function
+`Q_Omega` is doing this partitioning work; the termination head meanwhile
+drives β→0 (options run until the episode ends) and the intra-option policies
+stay close (mean pairwise action-distribution TV ≈ 0.05), the known
+Option-Critic tendency for options to under-differentiate without stronger
+regularisation than `delib_cost` provides.
+
+Artifacts: `results/option_critic_transfer_curves.png`,
+`results/option_critic_options.png`,
+`results/option_critic_verification_summary.json`, `results/option_critic_run.log`.
