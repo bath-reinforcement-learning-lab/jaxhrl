@@ -21,8 +21,6 @@ Our implementations run very fast. HiPPO runs at ~73000 env-steps/s on a single 
 | [h-DQN](jaxhrl/h-DQN.py) | Kulkarni et al., *"Hierarchical Deep Reinforcement Learning: Integrating Temporal Abstraction and Intrinsic Motivation"* (2016) | ✅ Verified — matches the paper's own toy-MDP result |
 | [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | ✅ GPI's zero-shot skill combination matches the paper's own worked example |
 | [HiPPO](jaxhrl/HiPPO.py) | Li, Florensa, Clavera & Abbeel, *"Sub-Policy Adaptation for Hierarchical Reinforcement Learning"* (ICLR 2020) | ✅ Verified — reproduces the paper's own time-commitment ablation and skill-diversity diagnostic |
-| [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | 🟡 Partially verified — 2-level HAC reproduces the paper's sample-efficiency claim over a flat agent (2.7x fewer steps); the 3-level claim does not reproduce |
-| [HIRO](jaxhrl/HIRO.py) | Nachum et al., *"Data-Efficient Hierarchical Reinforcement Learning"* | 🚧 Stub — not yet implemented |
 | [option_critic](jaxhrl/option_critic.py) | Bacon, Harb & Precup, *"The Option-Critic Architecture"* (AAAI 2017) | ✅ Verified — reproduces the paper's four-rooms transfer direction (Figure 3, options recover faster after the goal moves) and option specialization (Figure 4) |
 
 ## Verification
