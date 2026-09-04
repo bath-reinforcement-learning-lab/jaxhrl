@@ -3,25 +3,27 @@
 Scripts import the actual repo classes/functions (network
 architectures, loss functions, action-selection logic) directly from
 `jaxhrl/DCEO.py`, `jaxhrl/h-DQN.py`, `jaxhrl/option_keyboard.py`,
-`jaxhrl/HiPPO.py`, `jaxhrl/option_critic.py` and `jaxhrl/HAC.py` via
-`repo_loader.py` — nothing
+`jaxhrl/HiPPO.py`, `jaxhrl/option_critic.py`, `jaxhrl/MOC.py`, `jaxhrl/HAC.py`
+and `jaxhrl/METRA.py` via `repo_loader.py` — nothing
 about the algorithms themselves is reimplemented here. The only custom code is
 (1) small toy environments with known ground truth or a deliberately controlled
 structure (FourRooms with exact Laplacian eigenvectors; the Kulkarni et al. toy
 stochastic chain; Barreto et al.'s own "Foraging World" domain; a small
 POMDP built to isolate HiPPO's time-commitment mechanism; the Option-Critic
-paper's own four-rooms navigation task with a relocatable goal; a continuous
-four-rooms point mass standing in for Levy et al.'s ant four rooms) and (2)
-thin training loops that call the repo's real loss functions. HAC is the
-exception and goes further than the others: `hac_verify.py` executes the repo's
-real `__main__` training loop via `runpy` against a patched environment
-factory, so its entire scan body — level scheduler, hindsight transitions,
-replay — is what runs, not a reimplementation.
+paper's own four-rooms navigation task with a relocatable goal, reused for MOC;
+a continuous four-rooms point mass standing in for Levy et al.'s ant four
+rooms; a reward-free FourRooms with an exact shortest-path oracle for METRA)
+and (2) thin training loops that call the repo's real loss functions. HAC and
+METRA go further than the others: `hac_verify.py` and `metra_verify.py`
+execute the repo's real `__main__` training loop via `runpy` against a patched
+environment factory, so the entire scan body is what runs, not a
+reimplementation.
 
 Reproduce with: `.venv/bin/python dceo_verify.py && .venv/bin/python hdqn_verify.py
 && .venv/bin/python okeyboard_verify.py && .venv/bin/python hippo_verify.py
-&& .venv/bin/python option_critic_verify.py && .venv/bin/python hac_verify.py`
-(needs `jax flax optax flashbax numpy scipy matplotlib` — see `requirements.txt`).
+&& .venv/bin/python option_critic_verify.py && .venv/bin/python moc_verify.py
+&& .venv/bin/python hac_verify.py && .venv/bin/python metra_verify.py`
+(needs `jax flax optax flashbax numpy scipy matplotlib pyyaml` — see `requirements.txt`).
 
 ---
 
@@ -75,6 +77,91 @@ Artifacts: `results/dceo_eigenvectors_beta1.png`,
 `results/dceo_eigenvectors_beta0_ablation.png`,
 `results/dceo_loss_and_collapse.png`, `results/dceo_verification_summary.json`,
 `dceo_run.log`.
+
+---
+
+## HAC — "Learning Multi-Level Hierarchies with Hindsight" (Levy et al. 2019)
+
+**Verdict: partially verified.** The implementation's machinery is correct at
+every depth, and the paper's sample-efficiency claim reproduces for a
+**two-level** hierarchy: 2-level HAC reaches 50% success 2.7x faster and 80%
+success 2.2x faster than a flat agent on the same task with the same episode
+budget. The paper's **three-level** claim does **not** reproduce here, and the
+cause is not established.
+
+Everything below runs the repo's real `jaxhrl/HAC.py` training loop — the level
+scheduler, hindsight action transitions, hindsight goal relabelling,
+subgoal-testing penalties and per-level DDPG updates. `hac_verify.py`
+monkeypatches `make_jax_env` and executes the actual `__main__` via `runpy`;
+only the environment and the harness are custom.
+
+### DDPG core, against a known optimum
+
+A bandit whose true Q is maximised at a = 0.5, using the repo's real `Actor`,
+`Critic`, `critic_loss_fn`, `actor_loss_fn` and `train_level_step`:
+
+| | a = -1.0 | -0.5 | 0.0 | 0.5 | 1.0 |
+|---|---|---|---|---|---|
+| learned Q | -5.62 | -2.53 | -0.64 | -0.05 | -0.63 |
+| true Q | -5.62 | -2.50 | -0.62 | -0.00 | -0.62 |
+
+The critic recovers the true Q function (final loss 3.5e-4), the actor ascends
+it to 0.418 against an optimum of 0.5, and Polyak updates propagate to the
+target network. The DDPG core is sound independently of the hierarchy.
+
+### The hierarchy learns at every depth
+
+On an open 2D point-mass goal-reaching task, end-goal success reaches **1.000 /
+0.998 / 0.955** at 1 / 2 / 3 levels, with every level's critic converging. The
+scheduler, relabelling and replay path all function at full depth.
+
+### Depth sweep — continuous Four Rooms
+
+`pointmaze.py`: a point mass in four rooms joined by doorways, always starting
+in the bottom-left room with the end goal sampled arena-wide, so most goals
+require routing through doorways. The step size (0.01) makes crossing the arena
+take ~200 steps, so the 729-step episode is necessary rather than generous —
+the long-horizon sparse-reward regime the paper's claim concerns. Dynamics are
+deliberately trivial so nothing about motor control confounds the measurement.
+
+Every arm gets an identical 729-step episode budget (H_levels = [729] /
+[27,27] / [9,9,9]) and the log chunk equals the horizon, so each point
+aggregates exactly one episode per environment.
+
+| arm | final success | env-steps to 0.5 | to 0.8 |
+|---|---|---|---|
+| flat (k=1) | 0.862 | 1,492,992 | 2,612,736 |
+| **2-level HAC** | **0.898** | **559,872** | **1,213,056** |
+| 3-level HAC | 0.015 | never | never |
+| 3-level, no subgoal testing | 0.000 | never | never |
+
+The 2-level result is the paper's claim: same task, same episode budget, 2.7x
+fewer environment steps to 50% success and 2.2x fewer to 80%.
+
+### What does not reproduce
+
+Three levels fails on this benchmark, and the reason is open. Two candidate
+explanations were tested and neither survived:
+
+- *Per-level horizon allocation.* HAC.py supports both a uniform per-level
+  budget and Levy's allocation (sub-levels fixed, top level absorbing the
+  remainder) via the `horizon` config key. Results depend strongly on the
+  choice — at k=2, [27,27] gives 0.898 but [9,81] gives 0.032 — but no
+  allocation rescues k=3.
+- *Level-0 reach margin.* Every working configuration had level-0 reach >= 9x
+  the goal threshold and both failing ones had 3x, suggesting the deepest arm
+  simply could not place reachable subgoals. Re-running k=3 at 9x margin did
+  not recover it (0.000-0.023). That test also shrank the end goal by the same
+  factor, so it is closer to inconclusive than to a clean refutation.
+
+Since the same 3-level agent solves the open point-mass at 0.955, the depth
+machinery works; what is unverified is that it delivers the paper's advantage
+on a long-horizon maze. Testing k=3 at the margin that works for k=2 requires
+a 27**3 ~ 19,700-step horizon, 27x more compute per episode than these CPU
+runs allow, which is the natural next step on a GPU.
+
+Artifacts: `results/hac_levels_comparison.png`,
+`results/hac_verification_summary.json`.
 
 ---
 
@@ -296,3 +383,149 @@ regularisation than `delib_cost` provides.
 Artifacts: `results/option_critic_transfer_curves.png`,
 `results/option_critic_options.png`,
 `results/option_critic_verification_summary.json`, `results/option_critic_run.log`.
+
+---
+
+## MOC — "Flexible Option Learning" (Klissarov & Precup, NeurIPS 2021)
+
+**Verdict: matches the paper's core four-rooms claim.** `jaxhrl/MOC.py`'s
+`moc_loss_fn` — the arrival-probability-weighted update of *every* option from
+each transition, with a PPO-style clipped importance ratio correcting for the
+action having been sampled by the active option — reproduces "Flexible Option
+Learning"'s Figure 1b: on the non-stationary four-rooms task, the multi-update
+agent (MOC) recovers from the goal relocation far faster than vanilla
+Option-Critic and with much lower seed variance.
+
+Same environment (`fourrooms_nav.py`), same on-policy training loop and same 16
+seeds as the Option-Critic verification above; the only thing that differs
+between the OC and MOC conditions is the loss function
+(`option_critic_loss_fn` vs `moc_loss_fn`), and the flat baseline is again the
+shared code path with `num_options=1`. All option components are learned from
+scratch; the goal relocates after 1M env-steps.
+
+### Non-stationary four-rooms (Figure 1b)
+
+Mean episode return (= goal-reach rate), 16 seeds. "recovered" = seeds whose
+final return exceeds 0.8:
+
+| condition | pre-switch AUC | post-switch AUC | return +0.5M | return +1.0M | final return (± seed std) | recovered |
+|---|---|---|---|---|---|---|
+| Flat actor-critic (1 option) | 0.85 | 0.31 ± 0.05 | 0.19 | 0.42 | 0.56 ± 0.30 | 6/16 |
+| Option-Critic (4 options) | 0.82 | 0.54 ± 0.04 | 0.41 | 0.68 | 0.80 ± 0.13 | 8/16 |
+| **MOC (4 options)** | 0.82 | **0.82 ± 0.01** | **0.82** | **0.96** | **0.99 ± 0.01** | **16/16** |
+
+All three learn the initial task at the same rate — phase-A return curves are
+superimposed and every seed reaches 0.8 in ~0.4M env-steps regardless of
+condition. After the goal moves:
+
+- **Both hierarchical agents beat flat** (post-switch AUC 0.54 / 0.82 vs 0.31).
+- **MOC recovers far faster than OC**: 0.5M env-steps after the relocation MOC
+  is already at 0.82 return, higher than OC reaches a full 1M steps later
+  (0.68). This is a larger gap than the paper's "half the episodes".
+- **MOC's seed variance is dramatically lower**: post-switch AUC standard
+  error 0.008 vs OC's 0.039, and final-return seed std 0.01 vs OC's 0.13. All
+  16 MOC seeds recover; only 8/16 OC and 6/16 flat do.
+
+The standard-error bands on `results/moc_transfer_curves.png` are fully
+disjoint for the entire recovery. This is a clean reproduction of Figure 1b —
+sharper than for vanilla Option-Critic (whose four-rooms transfer margin over
+a flat baseline was modest, see the section above), because MOC updates every
+option's value and policy from every transition, so the whole multi-option
+value function tracks the moved reward instead of one over-specialised option
+having to be unwound.
+
+### Option usage (Figures 1c / 6)
+
+Sweeping the seed-0 trained policies over every state:
+
+| | greedy-option usage entropy | dominant option share | information radius |
+|---|---|---|---|
+| Option-Critic (4 options) | 0.99 | 0.31 | 0.0101 |
+| MOC (4 options) | 0.14 | 0.95 | 0.0053 |
+
+MOC concentrates almost all of its behaviour in a single option and has a
+lower information radius (inter-option divergence) than OC — the direction the
+paper reports for the **tabular** regime (Figure 1c: multi-updating with
+η = 1.0 reduces option diversity), not the deep-MiniGrid regime of Figure 6.
+`MOC.py`'s `moc_loss_fn` is effectively η = 1.0 (it always updates every
+option), and the paper introduces η precisely to trade this collapse against
+the performance gain; on this near-tabular one-hot four-rooms the gain comes
+with the diversity cost.
+
+Artifacts: `results/moc_transfer_curves.png`,
+`results/moc_verification_summary.json`, `results/moc_run.log`.
+
+---
+
+## METRA — "Scalable Unsupervised RL with Metric-Aware Abstraction" (Park, Rybkin & Levine, ICLR 2024)
+
+**Verdict: matches the paper's core claims.** Running `jaxhrl/METRA.py`'s real
+training loop — the `(φ(s') − φ(s)) · z` intrinsic reward and the 1-Lipschitz
+constraint from `metra_components`, the Lagrangian φ update, the dual λ update
+and the discrete-SAC skill policy — unsupervised on a reward-free 13×13
+FourRooms with a 2-D continuous skill space: the learned abstraction φ recovers
+the environment's shortest-path (temporal-distance) geometry, the skill policy
+moves φ in commanded directions, and φ supports zero-shot goal reaching with no
+goal-conditioned policy ever trained.
+
+`metra_verify.py` patches `make_jax_env` to the reward-free FourRooms of
+`fourrooms_open.py` and runs METRA's `__main__` via `runpy` (the HAC
+precedent); only the environment and harness are custom. `fourrooms_open.py`
+exposes the exact all-pairs shortest-path matrix over the 104 free cells as the
+ground-truth temporal-distance metric. 5 seeds, 12.8M env-steps each, repo's
+shipped hyperparameters.
+
+### Skills are directed and diverse (objective Eq. 7)
+
+| | METRA skill policy | random policy |
+|---|---|---|
+| cos(φ(s_end) − φ(s_start), z), mean over 64 skills | **0.66 ± 0.04** | −0.02 ± 0.05 |
+| mean shortest-path distance, start → end of a 50-step rollout | 7.8 | — |
+
+A skill conditioned on z reliably moves φ in the direction of z (all 5 seeds
+0.61–0.70) — something a random policy does not do — and the skills' endpoints
+fan out across the grid (endpoint spread 3.8 cells).
+
+### φ recovers the temporal-distance metric (Theorem 4.1)
+
+| | mean ± seed std | per seed |
+|---|---|---|
+| Spearman(‖φᵢ − φⱼ‖, shortest-path distance), all 5356 pairs | 0.68 ± 0.18 | 0.95 / 0.78 / 0.69 / 0.49 / 0.49 |
+| Procrustes disparity, φ vs classical-MDS of the shortest-path matrix (0 = identical) | 0.29 ± 0.19 | 0.02–0.51 |
+
+Every seed's φ, laid out in 2-D, reproduces the four-room topology as the same
+four-armed "cross" that classical MDS of the shortest-path matrix produces —
+the rooms pulled into separate arms because the doorways make cross-room travel
+long (`results/metra_phi_map.png`). On 3 of 5 seeds the match is also
+metrically precise (Spearman ≥ 0.69, Procrustes ≤ 0.24); on the other 2 the
+geometry is recognisably right but rotated/compressed (Spearman ≈ 0.49).
+
+### Zero-shot goal reaching (Section 5.3 / Figure 8)
+
+Setting z from φ and running the skill policy greedily, 60 random
+(start, goal) pairs, mean shortest-path distance to the goal:
+
+| | distance to goal |
+|---|---|
+| at episode start | 7.1 |
+| after 50 steps, z = (φ(g) − φ(s₀))/‖·‖ fixed for the episode | 5.9 ± 1.1 |
+| after 50 steps, z = (φ(g) − φ(sₜ))/‖·‖ recomputed each step | **2.8 ± 0.5** |
+| after 50 steps, random z | 8.8 ± 0.1 |
+
+Closed-loop skill selection from φ reaches within 2 cells of the goal 66% of
+the time (all seeds 55–75%) — METRA's zero-shot goal-reaching claim — while a
+random skill drifts *away* from the goal. The fixed-z variant (faithful to how
+skills are trained, one z per episode) still roughly halves the gap.
+
+### Notes on the implementation
+
+`metra_components` matches the paper's reward and constraint. The φ objective
+in `METRA.py`'s `__main__` differs from Algorithm 1 in scale — the Lipschitz
+penalty uses the *mean* squared coordinate difference rather than the sum (a
+looser constraint by a factor of `z_dim`), the reward term carries a 10×
+weight, and the dual step is taken in log-λ space. These are scale/tuning
+choices, not changes to the mechanism, and the paper's claims reproduce with
+the repo's shipped hyperparameters.
+
+Artifacts: `results/metra_phi_map.png`,
+`results/metra_verification_summary.json`, `results/metra_run.log`.

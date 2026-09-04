@@ -24,6 +24,7 @@ Our implementations run very fast. HiPPO runs at ~73000 env-steps/s on a single 
 | [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | Partially verified — 2-level HAC reproduces the paper's sample-efficiency claim over a flat agent (2.7x fewer steps); the 3-level claim does not reproduce |
 | [option_critic](jaxhrl/option_critic.py) | Bacon, Harb & Precup, *"The Option-Critic Architecture"* (AAAI 2017) |  Verified — reproduces the paper's four-rooms transfer direction (Figure 3, options recover faster after the goal moves) and option specialization (Figure 4) |
 | [MOC](jaxhrl/MOC.py) | Klissarov & Precup, *"Flexible Option Learning"* (NeurIPS 2021) |  Verified — reproduces the paper's four-rooms result (Figure 1b): multi-updating recovers from the goal relocation far faster than vanilla Option-Critic and with ~10x lower seed variance |
+| [METRA](jaxhrl/METRA.py) | Park, Rybkin & Levine, *"Scalable Unsupervised RL with Metric-Aware Abstraction"* (ICLR 2024) | Verified — on a reward-free FourRooms the learned φ recovers the shortest-path metric, skills move φ in commanded directions, and φ drives zero-shot goal reaching |
 
 ## Verification
 
@@ -74,6 +75,15 @@ loss code and test it against toy environments from the original papers. Full wr
   all 16 MOC seeds recover vs 8/16 OC). MOC does this by leaning on fewer
   options (usage entropy 0.14 vs OC's 0.99) — the diversity/performance
   trade-off the paper's η hyperparameter is meant to control.
+- **METRA** (*Metric-Aware Abstraction*): ran the repo's real unsupervised
+  training loop on a reward-free FourRooms with a 2-D skill space. The learned
+  abstraction φ recovers the shortest-path (temporal-distance) geometry —
+  Spearman 0.68 between φ-distance and true shortest-path distance, and φ in
+  2-D reproduces the four-armed "cross" that classical MDS of the shortest-path
+  matrix gives on every seed. Skills move φ in their commanded direction
+  (cos 0.66 vs 0.0 for a random policy), and closed-loop skill selection from
+  φ reaches zero-shot goals it never trained on (mean distance 7.1 → 2.8,
+  within-2 success 66%), 5 seeds.
 
 Rerun any check with e.g. `python verification/dceo_verify.py`.
 
