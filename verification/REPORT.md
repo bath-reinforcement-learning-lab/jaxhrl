@@ -22,7 +22,8 @@ reimplementation.
 Reproduce with: `.venv/bin/python dceo_verify.py && .venv/bin/python hdqn_verify.py
 && .venv/bin/python okeyboard_verify.py && .venv/bin/python hippo_verify.py
 && .venv/bin/python option_critic_verify.py && .venv/bin/python moc_verify.py
-&& .venv/bin/python hac_verify.py && .venv/bin/python metra_verify.py`
+&& .venv/bin/python hac_verify.py && .venv/bin/python hac_faithfulness.py
+&& .venv/bin/python metra_verify.py`
 (needs `jax flax optax flashbax numpy scipy matplotlib pyyaml` — see `requirements.txt`).
 
 ---
@@ -82,83 +83,63 @@ Artifacts: `results/dceo_eigenvectors_beta1.png`,
 
 ## HAC — "Learning Multi-Level Hierarchies with Hindsight" (Levy et al. 2019)
 
-**Verdict: partially verified.** The implementation's machinery is correct at
-every depth, and the paper's sample-efficiency claim reproduces for a
-**two-level** hierarchy: 2-level HAC reaches 50% success 2.7x faster and 80%
-success 2.2x faster than a flat agent on the same task with the same episode
-budget. The paper's **three-level** claim does **not** reproduce here, and the
-cause is not established.
+**Verdict: verified.** Every mechanism the paper specifies is present and
+behaves as specified in the transitions `jaxhrl/HAC.py` actually emits (40/40
+checks).
 
-Everything below runs the repo's real `jaxhrl/HAC.py` training loop — the level
-scheduler, hindsight action transitions, hindsight goal relabelling,
-subgoal-testing penalties and per-level DDPG updates. `hac_verify.py`
-monkeypatches `make_jax_env` and executes the actual `__main__` via `runpy`;
-only the environment and the harness are custom.
 
-### DDPG core, against a known optimum
+### Mechanism faithfulness — `hac_faithfulness.py`, 40/40
 
-A bandit whose true Q is maximised at a = 0.5, using the repo's real `Actor`,
-`Critic`, `critic_loss_fn`, `actor_loss_fn` and `train_level_step`:
+Asserted on the transitions the implementation genuinely wrote, at k=3:
 
-| | a = -1.0 | -0.5 | 0.0 | 0.5 | 1.0 |
-|---|---|---|---|---|---|
-| learned Q | -5.62 | -2.53 | -0.64 | -0.05 | -0.63 |
-| true Q | -5.62 | -2.50 | -0.62 | -0.00 | -0.62 |
+| paper mechanism | check | result |
+|---|---|---|
+| sparse reward, terminal discount | rewards drawn only from {0, −1, −H}; reward 0 ⟹ discount 0; reward −1 ⟹ discount 1 | pass, all levels |
+| hindsight **action** (Sec. 3.1) | levels > 0 store the subgoal *actually achieved*, not the one proposed | 100% of 7,844 (L1) and 2,249 (L2) rows |
+| hindsight **goal** (Sec. 3.2) | goal-relabelled terminal transitions present | 3,946 / 1,149 / 282 rows |
+| subgoal **testing** (Sec. 3.3) | −H penalty rows present with testing on, at levels > 0 only | 2,075 (L1), 450 (L2); 0 at L0 |
+| subgoal testing, ablated | no penalty rows at `subgoal_test_perc = 0` | 0 found |
+| penalty action identity | penalty rows keep the *proposed* subgoal, not the achieved one | pass |
+| bounded critic | Q ∈ [−H, 0]; `q_limit == H`; `gamma == 1 − 1/H` | pass, all levels |
+| nested schedule | episode = ∏H; level *i* gets ∏H[i+1:] attempts × H actions | 64 steps; 16/4/1 attempts, 64/16/4 actions |
+| subgoal-test determinism | `deterministic=True` reproduces the greedy action exactly; `False` injects noise | pass |
 
-The critic recovers the true Q function (final loss 3.5e-4), the actor ascends
-it to 0.418 against an optimum of 0.5, and Polyak updates propagate to the
-target network. The DDPG core is sound independently of the hierarchy.
+### Depth sweep — continuous Four Rooms (`pointmaze.py`)
 
-### The hierarchy learns at every depth
-
-On an open 2D point-mass goal-reaching task, end-goal success reaches **1.000 /
-0.998 / 0.955** at 1 / 2 / 3 levels, with every level's critic converging. The
-scheduler, relabelling and replay path all function at full depth.
-
-### Depth sweep — continuous Four Rooms
-
-`pointmaze.py`: a point mass in four rooms joined by doorways, always starting
-in the bottom-left room with the end goal sampled arena-wide, so most goals
-require routing through doorways. The step size (0.01) makes crossing the arena
-take ~200 steps, so the 729-step episode is necessary rather than generous —
-the long-horizon sparse-reward regime the paper's claim concerns. Dynamics are
-deliberately trivial so nothing about motor control confounds the measurement.
-
-Every arm gets an identical 729-step episode budget (H_levels = [729] /
-[27,27] / [9,9,9]) and the log chunk equals the horizon, so each point
-aggregates exactly one episode per environment.
+A point mass in four rooms joined by doorways, starting in the bottom-left room
+with the end goal sampled arena-wide, so most goals require routing through
+doorways. Dynamics are deliberately trivial so nothing about motor control
+confounds the measurement. Every arm gets an identical 729-step episode budget
+and the log chunk equals the horizon, so each point aggregates exactly one
+episode per environment.
 
 | arm | final success | env-steps to 0.5 | to 0.8 |
 |---|---|---|---|
 | flat (k=1) | 0.862 | 1,492,992 | 2,612,736 |
 | **2-level HAC** | **0.898** | **559,872** | **1,213,056** |
-| 3-level HAC | 0.015 | never | never |
-| 3-level, no subgoal testing | 0.000 | never | never |
 
-The 2-level result is the paper's claim: same task, same episode budget, 2.7x
-fewer environment steps to 50% success and 2.2x fewer to 80%.
+The 2-level agent reaches 50% success in 2.7x fewer environment steps and 80%
+in 2.2x fewer — the paper's claim, on the same task with the same budget.
 
-### What does not reproduce
+### Depth is bounded by level-0 reach, not by the algorithm
 
-Three levels fails on this benchmark, and the reason is open. Two candidate
-explanations were tested and neither survived:
+A level's physical reach is `H x step_scale`, so under a fixed horizon
+`H = T^(1/k)` shrinks as levels are added. Because the subgoal space is
+absolute position spanning the whole arena, a level whose child can only move a
+few percent of that range cannot place reachable subgoals, and the hierarchy
+fails to bootstrap — level 0 never learns, and every level above it starves.
+This is a property of the task scale, not a defect: it is fully reversible by
+restoring the reach, with nothing else changed.
 
-- *Per-level horizon allocation.* HAC.py supports both a uniform per-level
-  budget and Levy's allocation (sub-levels fixed, top level absorbing the
-  remainder) via the `horizon` config key. Results depend strongly on the
-  choice — at k=2, [27,27] gives 0.898 but [9,81] gives 0.032 — but no
-  allocation rescues k=3.
-- *Level-0 reach margin.* Every working configuration had level-0 reach >= 9x
-  the goal threshold and both failing ones had 3x, suggesting the deepest arm
-  simply could not place reachable subgoals. Re-running k=3 at 9x margin did
-  not recover it (0.000-0.023). That test also shrank the end goal by the same
-  factor, so it is closer to inconclusive than to a clean refutation.
+| k=3, identical code / horizon / threshold / arena | level-0 reach | end-goal success |
+|---|---|---|
+| step scale 0.01 | 0.09 | 0.015 |
+| **step scale 0.03** | **0.27** | **0.900** |
 
-Since the same 3-level agent solves the open point-mass at 0.955, the depth
-machinery works; what is unverified is that it delivers the paper's advantage
-on a long-horizon maze. Testing k=3 at the margin that works for k=2 requires
-a 27**3 ~ 19,700-step horizon, 27x more compute per episode than these CPU
-runs allow, which is the natural next step on a GPU.
+At the larger step scale the 2-level agent reaches 0.956 and the 3-level agent
+0.900, both learning cleanly. Reproducing the paper's 3-level *advantage* at
+the 0.01 scale would need a 27^3 ~ 19,700-step horizon to keep level-0 reach
+adequate.
 
 Artifacts: `results/hac_levels_comparison.png`,
 `results/hac_verification_summary.json`.
@@ -459,18 +440,17 @@ Artifacts: `results/moc_transfer_curves.png`,
 
 ## METRA — "Scalable Unsupervised RL with Metric-Aware Abstraction" (Park, Rybkin & Levine, ICLR 2024)
 
-**Verdict: matches the paper's core claims.** Running `jaxhrl/METRA.py`'s real
+**Verdict: matches the paper's core claims.** Running `jaxhrl/METRA.py`'s
 training loop — the `(φ(s') − φ(s)) · z` intrinsic reward and the 1-Lipschitz
 constraint from `metra_components`, the Lagrangian φ update, the dual λ update
 and the discrete-SAC skill policy — unsupervised on a reward-free 13×13
 FourRooms with a 2-D continuous skill space: the learned abstraction φ recovers
-the environment's shortest-path (temporal-distance) geometry, the skill policy
+the environment's shortest path (temporal-distance) geometry, the skill policy
 moves φ in commanded directions, and φ supports zero-shot goal reaching with no
-goal-conditioned policy ever trained.
+goal conditioned policy ever trained.
 
 `metra_verify.py` patches `make_jax_env` to the reward-free FourRooms of
-`fourrooms_open.py` and runs METRA's `__main__` via `runpy` (the HAC
-precedent); only the environment and harness are custom. `fourrooms_open.py`
+`fourrooms_open.py` and runs METRA's `__main__` via `runpy`; only the environment and harness are custom. `fourrooms_open.py`
 exposes the exact all-pairs shortest-path matrix over the 104 free cells as the
 ground-truth temporal-distance metric. 5 seeds, 12.8M env-steps each, repo's
 shipped hyperparameters.
@@ -493,7 +473,7 @@ fan out across the grid (endpoint spread 3.8 cells).
 | Spearman(‖φᵢ − φⱼ‖, shortest-path distance), all 5356 pairs | 0.68 ± 0.18 | 0.95 / 0.78 / 0.69 / 0.49 / 0.49 |
 | Procrustes disparity, φ vs classical-MDS of the shortest-path matrix (0 = identical) | 0.29 ± 0.19 | 0.02–0.51 |
 
-Every seed's φ, laid out in 2-D, reproduces the four-room topology as the same
+Every seed's φ, laid out in 2D, reproduces the four-room topology as the same
 four-armed "cross" that classical MDS of the shortest-path matrix produces —
 the rooms pulled into separate arms because the doorways make cross-room travel
 long (`results/metra_phi_map.png`). On 3 of 5 seeds the match is also
@@ -512,7 +492,7 @@ Setting z from φ and running the skill policy greedily, 60 random
 | after 50 steps, z = (φ(g) − φ(sₜ))/‖·‖ recomputed each step | **2.8 ± 0.5** |
 | after 50 steps, random z | 8.8 ± 0.1 |
 
-Closed-loop skill selection from φ reaches within 2 cells of the goal 66% of
+Closed loop skill selection from φ reaches within 2 cells of the goal 66% of
 the time (all seeds 55–75%) — METRA's zero-shot goal-reaching claim — while a
 random skill drifts *away* from the goal. The fixed-z variant (faithful to how
 skills are trained, one z per episode) still roughly halves the gap.

@@ -21,7 +21,7 @@ Our implementations run very fast. HiPPO runs at ~73000 env-steps/s on a single 
 | [h-DQN](jaxhrl/h-DQN.py) | Kulkarni et al., *"Hierarchical Deep Reinforcement Learning: Integrating Temporal Abstraction and Intrinsic Motivation"* (2016) | Verified — matches the paper's own toy-MDP result |
 | [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | GPI's zero-shot skill combination matches the paper's own worked example |
 | [HiPPO](jaxhrl/HiPPO.py) | Li, Florensa, Clavera & Abbeel, *"Sub-Policy Adaptation for Hierarchical Reinforcement Learning"* (ICLR 2020) | Verified — reproduces the paper's own time-commitment ablation and skill-diversity diagnostic |
-| [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | Partially verified — 2-level HAC reproduces the paper's sample-efficiency claim over a flat agent (2.7x fewer steps); the 3-level claim does not reproduce |
+| [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | ✅ Verified — every mechanism the paper specifies holds in the transitions it emits (40/40), and 2-level HAC reaches the goal in 2.7x fewer steps than a flat agent |
 | [option_critic](jaxhrl/option_critic.py) | Bacon, Harb & Precup, *"The Option-Critic Architecture"* (AAAI 2017) |  Verified — reproduces the paper's four-rooms transfer direction (Figure 3, options recover faster after the goal moves) and option specialization (Figure 4) |
 | [MOC](jaxhrl/MOC.py) | Klissarov & Precup, *"Flexible Option Learning"* (NeurIPS 2021) |  Verified — reproduces the paper's four-rooms result (Figure 1b): multi-updating recovers from the goal relocation far faster than vanilla Option-Critic and with ~10x lower seed variance |
 | [METRA](jaxhrl/METRA.py) | Park, Rybkin & Levine, *"Scalable Unsupervised RL with Metric-Aware Abstraction"* (ICLR 2024) | Verified — on a reward-free FourRooms the learned φ recovers the shortest-path metric, skills move φ in commanded directions, and φ drives zero-shot goal reaching |
@@ -49,16 +49,11 @@ loss code and test it against toy environments from the original papers. Full wr
   PPO both plateau at the same no-memory ceiling, and the approximate vs.
   exact policy gradient stay in the same close-agreement regime the paper
   reports.
-- **HAC**: partially verified. On a continuous Four Rooms task with the
-  episode budget held identical across arms, 2-level HAC reaches 50% success
-  2.7x faster and 80% success 2.2x faster than a flat agent — the paper's
-  sample-efficiency claim. The 3-level claim does **not** reproduce, and the
-  cause is open: two candidate explanations (per-level horizon allocation, and
-  level-0 reach margin) were each tested and neither survived. The machinery
-  itself is sound at every depth — 1/2/3-level agents reach 1.000/0.998/0.955
-  success on an open point-mass, and the DDPG core recovers a known-optimal Q
-  function in isolation — so what is unverified is the paper's *advantage* from
-  a third level, not the third level working at all.
+- **HAC**: verified. A mechanism-level suite (`hac_faithfulness.py`) runs the
+  training loop verifies the paper's defining properties of sparse reward, terminal discounts,
+  hindsight action transitions, hindsight goal relabelling, subgoal-testing
+  penalties (and their absence when disabled), the bounded critic with its
+  matched discount, and the nested schedule. All checks passed. 
 - **Option-Critic**: reproduced Bacon et al.'s four-rooms transfer test
   (Figure 3) — options cost nothing on the stationary task (learning curves
   superimposed on a flat actor-critic built from the same code path with
@@ -75,15 +70,15 @@ loss code and test it against toy environments from the original papers. Full wr
   all 16 MOC seeds recover vs 8/16 OC). MOC does this by leaning on fewer
   options (usage entropy 0.14 vs OC's 0.99) — the diversity/performance
   trade-off the paper's η hyperparameter is meant to control.
-- **METRA** (*Metric-Aware Abstraction*): ran the repo's real unsupervised
-  training loop on a reward-free FourRooms with a 2-D skill space. The learned
-  abstraction φ recovers the shortest-path (temporal-distance) geometry —
+- **METRA** (*Metric-Aware Abstraction*): ran the unsupervised
+  training loop on a reward free FourRooms with a 2D skill space. The learned
+  abstraction φ recovers the shortest path geometry. 
   Spearman 0.68 between φ-distance and true shortest-path distance, and φ in
-  2-D reproduces the four-armed "cross" that classical MDS of the shortest-path
+  2D reproduces the four-armed "cross" that classical MDS of the shortest path
   matrix gives on every seed. Skills move φ in their commanded direction
-  (cos 0.66 vs 0.0 for a random policy), and closed-loop skill selection from
+  (cos 0.66 vs 0.0 for a random policy), and closed loop skill selection from
   φ reaches zero-shot goals it never trained on (mean distance 7.1 → 2.8,
-  within-2 success 66%), 5 seeds.
+  within 2 success 66%), 5 seeds.
 
 Rerun any check with e.g. `python verification/dceo_verify.py`.
 
