@@ -1,6 +1,8 @@
 import functools
+import re
 import jax
 import jax.numpy as jnp
+import numpy as np
 from typing import Tuple, Any, NamedTuple, Callable
 
 class JaxWrappedEnv(NamedTuple):
@@ -108,6 +110,127 @@ def _craftax_cumulant_fn(obs, state, action, reward, next_obs, next_state, cumul
     phi = jnp.pad(phi, (0, pad_len))
     return phi[:cumulant_dim]
 
+# Object encodings from jumanji.environments.routing.sokoban.constants -- duplicated
+# here (rather than imported) so this module doesn't need jumanji installed just to
+# define cumulant_fn for non-jumanji envs.
+_SOKOBAN_TARGET = 2
+_SOKOBAN_BOX = 4
+_SOKOBAN_N_BOXES = 4
+_SOKOBAN_GRID_SIZE = 10
+# Longest possible Manhattan distance on the grid -- distance features below are
+# divided by this so they sit on the same rough scale as the reward (+-0.1 to +11)
+# instead of dominating it, which otherwise blows up the linear `w` regression.
+_SOKOBAN_MAX_DIST = 2 * (_SOKOBAN_GRID_SIZE - 1)
+
+def _sokoban_progress_features(state):
+    # For each box, its Manhattan distance to the nearest target (0 once placed),
+    # and the agent's distance to the nearest still-unplaced box -- these give the
+    # SF network signal on every step, unlike the sparse box-placed/level-complete reward.
+    fixed_grid, variable_grid, agent_location = state.fixed_grid, state.variable_grid, state.agent_location
+
+    box_rows, box_cols = jnp.nonzero(variable_grid == _SOKOBAN_BOX, size=_SOKOBAN_N_BOXES, fill_value=0)
+    tgt_rows, tgt_cols = jnp.nonzero(fixed_grid == _SOKOBAN_TARGET, size=_SOKOBAN_N_BOXES, fill_value=0)
+    box_on_target = fixed_grid[box_rows, box_cols] == _SOKOBAN_TARGET
+
+    boxes = jnp.stack([box_rows, box_cols], axis=-1).astype(jnp.float32)
+    targets = jnp.stack([tgt_rows, tgt_cols], axis=-1).astype(jnp.float32)
+    box_target_dists = jnp.sum(jnp.abs(boxes[:, None, :] - targets[None, :, :]), axis=-1)
+    min_dist_per_box = jnp.min(box_target_dists, axis=-1)
+    unplaced_box_to_target = jnp.sum(jnp.where(box_on_target, 0.0, min_dist_per_box)) / _SOKOBAN_MAX_DIST
+
+    agent = agent_location.astype(jnp.float32)
+    agent_box_dists = jnp.sum(jnp.abs(boxes - agent[None, :]), axis=-1)
+    # When every box is already on target there's no "unplaced box" to chase --
+    # fall back to 0 rather than an unmatched sentinel that would spike this feature.
+    all_placed = jnp.all(box_on_target)
+    agent_to_nearest_unplaced_box = jnp.where(
+        all_placed, 0.0, jnp.min(jnp.where(box_on_target, jnp.inf, agent_box_dists)) / _SOKOBAN_MAX_DIST
+    )
+
+    num_on_target = jnp.sum(box_on_target.astype(jnp.float32))
+    return num_on_target, unplaced_box_to_target, agent_to_nearest_unplaced_box
+
+def _sokoban_cumulant_fn(state, reward, next_state, cumulant_dim):
+    n_on_target, box_dist, agent_dist = _sokoban_progress_features(state)
+    n_on_target_next, box_dist_next, agent_dist_next = _sokoban_progress_features(next_state)
+    level_completed = (n_on_target_next == _SOKOBAN_N_BOXES).astype(jnp.float32)
+
+    phi = jnp.array([
+        reward,
+        n_on_target_next,
+        n_on_target_next - n_on_target,
+        level_completed,
+        -box_dist_next,
+        box_dist - box_dist_next,
+        -agent_dist_next,
+        agent_dist - agent_dist_next,
+    ])
+    pad_len = max(0, cumulant_dim - phi.shape[0])
+    phi = jnp.pad(phi, (0, pad_len))
+    return phi[:cumulant_dim]
+
+# ---------------------------------------------------------------------------
+# Discrete grid worlds -- the two discrete tasks from Levy et al.'s HAC paper
+# ("10 x 10 Grid World" and "Four Rooms"), used by the tabular HierQ variant.
+#
+# The observation IS the state index, because HierQ is tabular: its Q-tables are
+# indexed Q_i(s, g, a) with s and g drawn from the state set. `num_goals` is set
+# to the number of states, matching the paper's G_i = S.
+# ---------------------------------------------------------------------------
+
+class GridState(NamedTuple):
+    pos: jax.Array   # () int32 -- index into the free-cell list
+
+
+_GRID_ACTIONS = ((-1, 0), (1, 0), (0, -1), (0, 1))   # up, down, left, right
+
+
+def _grid_walls(env_id: str):
+    """Wall mask for a named layout. `fourrooms` is the classic 13x13 layout
+    (104 free states); anything of the form `NxN` is an open N-by-N room."""
+    key = env_id.lower()
+    if "fourroom" in key or "four_room" in key:
+        # "fourrooms" -> classic 13x13; "fourrooms21" -> 21x21, etc. Larger
+        # layouts make the task genuinely long-horizon, which is the regime the
+        # hierarchy claim is about. Q_i tables are S**3, so S stays modest.
+        m_sz = re.search(r"(\d+)", key)
+        n = int(m_sz.group(1)) if m_sz else 13
+        if n % 2 == 0:
+            n += 1               # odd side length keeps the dividers centred
+        walls = np.zeros((n, n), dtype=bool)
+        walls[0, :] = walls[n - 1, :] = True
+        walls[:, 0] = walls[:, n - 1] = True
+        mid = n // 2
+        walls[1:n - 1, mid] = True   # vertical divider
+        walls[mid, 1:n - 1] = True   # horizontal divider
+        q1, q3 = mid // 2, mid + (n - 1 - mid) // 2
+        for (r, c) in [(q1, mid), (q3, mid), (mid, q1), (mid, q3)]:
+            walls[r, c] = False      # one doorway per arm
+        return walls
+    m = re.fullmatch(r"(\d+)x(\d+)", key)
+    n = int(m.group(1)) if m else 10
+    return np.zeros((n, n), dtype=bool)
+
+
+def _make_gridworld(env_id: str):
+    """Precompute the full (n_states, n_actions) transition table. The world is
+    small enough that a lookup table is both exact and the fastest thing to
+    run under jit -- stepping is a single gather."""
+    walls = _grid_walls(env_id)
+    n = walls.shape[0]
+    free = [(r, c) for r in range(n) for c in range(n) if not walls[r, c]]
+    idx = {cell: i for i, cell in enumerate(free)}
+    n_states = len(free)
+
+    trans = np.zeros((n_states, len(_GRID_ACTIONS)), dtype=np.int32)
+    for i, (r, c) in enumerate(free):
+        for a, (dr, dc) in enumerate(_GRID_ACTIONS):
+            rr, cc = r + dr, c + dc
+            # Walking into a wall or off the grid leaves the agent in place.
+            trans[i, a] = idx[(rr, cc)] if (rr, cc) in idx else i
+    return jnp.asarray(trans), n_states, free
+
+
 def make_jax_env(framework: str, env_id: str, cumulant_dim: int, goal_threshold: float = 0.1, **env_kwargs) -> JaxWrappedEnv:
     
     def cumulant_fn(obs, state, action, reward, next_obs, next_state):
@@ -117,6 +240,9 @@ def make_jax_env(framework: str, env_id: str, cumulant_dim: int, goal_threshold:
             phi = jnp.array([reward, next_obs[2], next_obs[4]])
         elif "Craftax" in env_id or framework == "craftax":
             phi = _craftax_cumulant_fn(obs, state, action, reward, next_obs, next_state, cumulant_dim)
+            return phi
+        elif "Sokoban" in env_id:
+            phi = _sokoban_cumulant_fn(state, reward, next_state, cumulant_dim)
             return phi
         else:
             flat_obs = next_obs.flatten()
@@ -166,7 +292,7 @@ def make_jax_env(framework: str, env_id: str, cumulant_dim: int, goal_threshold:
 
     elif framework == "jumanji":
         import jumanji
-        env = jumanji.make(env_id)
+        env = jumanji.make(env_id, **env_kwargs)
 
         def flatten_obs(obs_tree):
             leaves = jax.tree_util.tree_leaves(obs_tree)
@@ -245,6 +371,26 @@ def make_jax_env(framework: str, env_id: str, cumulant_dim: int, goal_threshold:
         return JaxWrappedEnv(brax_env, None, state_dim, 0, reset_fn, step_fn,
                               cumulant_fn, None, 0, None, None, None,
                               action_dim=action_dim, action_low=action_low, action_high=action_high)
+
+    elif framework == "gridworld":
+        # Tabular discrete task. `done` is always False and the reward is always
+        # zero: like the brax branch, the algorithm owns the episode boundary and
+        # builds its own sparse goal reward.
+        trans, n_states, _free = _make_gridworld(env_id)
+
+        @jax.jit
+        def reset_fn(key):
+            pos = jax.random.randint(key, (), 0, n_states)
+            return jnp.asarray([pos], jnp.int32), GridState(pos=pos)
+
+        @jax.jit
+        def step_fn(key, state, action):
+            pos = trans[state.pos, action]
+            return (jnp.asarray([pos], jnp.int32), GridState(pos=pos),
+                    jnp.float32(0.0), jnp.bool_(False), {})
+
+        return JaxWrappedEnv(None, None, 1, len(_GRID_ACTIONS), reset_fn, step_fn,
+                              cumulant_fn, None, n_states, None, None, None)
 
     else:
         raise ValueError(f"Unknown JAX environment framework wrapper target: {framework}")

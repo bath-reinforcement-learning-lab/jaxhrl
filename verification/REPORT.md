@@ -23,6 +23,7 @@ Reproduce with: `.venv/bin/python dceo_verify.py && .venv/bin/python hdqn_verify
 && .venv/bin/python okeyboard_verify.py && .venv/bin/python hippo_verify.py
 && .venv/bin/python option_critic_verify.py && .venv/bin/python moc_verify.py
 && .venv/bin/python hac_verify.py && .venv/bin/python hac_faithfulness.py
+&& .venv/bin/python hierq_verify.py && .venv/bin/python hierq_faithfulness.py
 && .venv/bin/python metra_verify.py`
 (needs `jax flax optax flashbax numpy scipy matplotlib pyyaml` — see `requirements.txt`).
 
@@ -229,6 +230,98 @@ we didn't chase this further.
 
 Artifacts: `results/ok_gpi_zeroshot.png`, `results/ok_sf_accuracy.png`,
 `results/okeyboard_verification_summary.json`, `okeyboard_run.log`.
+
+---
+
+## HierQ — "Learning Multi-Level Hierarchies with Hindsight", Algorithm 2 (Levy et al. 2019)
+
+**Verdict: verified as an implementation; the paper's depth ordering reproduces
+in part.** Every mechanism Algorithm 2 specifies is present and behaves as
+specified (20/20 checks), and hierarchical agents beat the flat agent by a
+margin that grows with task scale -- up to 6.3x fewer training episodes. The
+paper's further claim that a 3-level agent beats a 2-level one does not
+reproduce here.
+
+HierQ is the discrete counterpart of HAC, and differs from it in two ways that
+both come straight from Algorithm 2:
+
+- **No subgoal testing.** HAC needs -H penalty transitions to stop a level
+  proposing subgoals its child cannot reach. HierQ has none; *pessimistic
+  initialisation* does that job, because `Q_i(s, ., a)` is only ever written at
+  actions `a` genuinely reached from `s` within the level's horizon, so an
+  unreachable subgoal keeps its initial value and never wins an argmax.
+- **Exhaustive rather than sampled hindsight.** `Q_0` is updated for *every*
+  goal in the state space per transition, and `Q_i` over `PrevStates_i` x all
+  goals -- HER by enumeration.
+
+### Mechanism faithfulness — `hierq_faithfulness.py`, 20/20
+
+Both update rules are checked against hand-computed Bellman targets, then the
+repo's real `__main__` loop is executed via `runpy` and the resulting Q-tables
+inspected directly.
+
+| Algorithm 2 property | check | result |
+|---|---|---|
+| level-0 all-goals update | equals `(1-a)Q + a[R + g.max Q(s',g,.)]` for every goal | exact (0.00e+00) |
+| all-goals HER | exactly \|S\| goal-entries written per transition | pass |
+| level-i PrevStates update | matches the equation for every (state, goal) | exact (0.00e+00) |
+| hindsight **action** | the stored action is `s'` itself | only the `a=s'` plane written |
+| window masking | masked slots never written | pass |
+| initialisation | `Q_0` optimistic at 0; `Q_i>0` pessimistic | pass |
+| **reachability invariant** | every written (state, subgoal) pair is reachable within that level's horizon | **0 unreachable, both levels** |
+| pessimism holds | unreachable subgoals retain the floor; nothing falls below it | pass |
+| no subgoal testing | no value below the floor (HierQ has no penalty transitions) | pass |
+| nested schedule | top attempt == episode; `end[i+1] => end[i]`; per-level bounds | pass |
+
+The reachability invariant is the one that matters most: it is *because* `Q_i`
+is only ever written at achievable subgoals that pessimistic initialisation can
+substitute for subgoal testing.
+
+`gamma_i` and the pessimistic floor are one choice, not two. The floor must be
+the fixed point of `Q = -1 + gamma_i.Q`, i.e. `-1/(1-gamma_i)`, or reachable
+subgoals get driven *below* untouched unreachable ones and the argmax prefers
+exactly what the level cannot achieve. `gamma_i = 1 - 1/H_i` satisfies that and
+keeps the value range commensurate with the level's own budget (floor `-H_i`),
+the same relationship HAC uses. The paper specifies a single global `gamma`,
+which cannot be commensurate with every level's horizon at once; this is the one
+deliberate departure from the letter of Algorithm 2.
+
+### Depth comparison — grid worlds
+
+`gridworld` in `common/wrappers.py` provides the paper's discrete domains. The
+episode horizon is held at 125 primitive steps for every arm, with the sub-level
+budget H=5 constant across depths and the top level absorbing the remainder
+(`H_levels` = [125] / [5,25] / [5,5,5]), so every agent gets both the same
+environment budget and the same level-0 reach. Three seeds; x-axis is training
+episodes, matching the paper's figure.
+
+Training episodes to 80% success (lower is better):
+
+| Four Rooms | states | flat (k=1) | 2-level | 3-level |
+|---|---|---|---|---|
+| 13x13 | 104 | 447 | **195** (2.3x) | 304 (1.5x) |
+| 17x17 | 200 | 1,220 | **243** (5.0x) | 607 (2.0x) |
+| 21x21 | 328 | 2,515 | **398** (6.3x) | 1,220 (2.1x) |
+
+Both hierarchical agents beat the flat agent at every scale, and the margin
+grows as the task gets longer-horizon -- which is the mechanism the paper
+appeals to. On the largest maze the flat agent does not even converge
+(0.875 +- 0.048) while the 2-level agent does (0.995 +- 0.006).
+
+Note the flat arm here is *stronger* than the paper's baseline. Algorithm 2 is
+defined for `k > 1`; the paper's flat comparison is "Q-learning with HER", which
+samples a few relabelled goals, whereas `num_levels: 1` inherits HierQ's
+exhaustive all-goals update -- |S| relabels per transition. The hierarchy's win
+is therefore against a harder baseline than the paper's.
+
+**What does not reproduce:** the 3-level agent never beat the 2-level agent --
+in all nine comparisons (3 task scales x 3 seeds), and under three different
+gamma/floor settings. With mean shortest paths of 8-14 steps and a level-0 reach
+of 5, a 2-level hierarchy already reduces the task to ~3 subgoal decisions;
+there is little left for a third level to abstract at grid-world scale.
+
+Artifacts: `results/hierq_levels_comparison.png`,
+`results/hierq_verification_summary.json`.
 
 ---
 

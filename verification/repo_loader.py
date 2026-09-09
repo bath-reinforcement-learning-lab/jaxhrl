@@ -93,6 +93,12 @@ def load_hac():
     return hac
 
 
+def load_hierq():
+    install_infra_stubs()
+    import jaxhrl.HierQ as hierq
+    return hierq
+
+
 def load_option_critic():
     install_infra_stubs()
     import jaxhrl.option_critic as oc
@@ -120,6 +126,8 @@ if __name__ == "__main__":
     print("HiPPO OK:", hippo.ManagerActorCritic, hippo.SkillActorCritic, hippo.select_hippo_action)
     hac = load_hac()
     print("HAC OK:", hac.Actor, hac.Critic, hac.train_level_step, hac.ring_add)
+    hierq = load_hierq()
+    print("HierQ OK:", hierq.update_level0, hierq.update_level_i, hierq.eps_greedy)
     oc = load_option_critic()
     print("Option-Critic OK:", oc.OptionCriticNetwork, oc.option_critic_loss_fn,
           oc.batch_select_option_critic_action)
