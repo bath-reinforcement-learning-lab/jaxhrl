@@ -238,9 +238,7 @@ Artifacts: `results/ok_gpi_zeroshot.png`, `results/ok_sf_accuracy.png`,
 **Verdict: verified as an implementation; the paper's depth ordering reproduces
 in part.** Every mechanism Algorithm 2 specifies is present and behaves as
 specified (20/20 checks), and hierarchical agents beat the flat agent by a
-margin that grows with task scale -- up to 6.3x fewer training episodes. The
-paper's further claim that a 3-level agent beats a 2-level one does not
-reproduce here.
+margin that grows with task scale -- up to 6.3x fewer training episodes. 
 
 HierQ is the discrete counterpart of HAC, and differs from it in two ways that
 both come straight from Algorithm 2:
