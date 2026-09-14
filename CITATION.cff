@@ -1,6 +1,8 @@
-@software{Miller_jaxhrl_2026,
-  author = {Samuel Miller},
-  title = {[jaxhrl]: JAX Implementations of Hierarchical RL Algorithms},
-  url = {https://github.com/bath-reinforcement-learning-lab/jaxhrl/},
-  year = {2026}
-}
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Samuel"
+  given-names: "Miller"
+  orcid: "https://orcid.org/my-orcid?orcid=0009-0006-5963-2557&justRegistered=true"
+title: "jaxhrl - JAX Implementations of Hierarchical RL Algorithms"
+date-released: 2026-09-14
+url: "https://github.com/bath-reinforcement-learning-lab/jaxhrl/}"
