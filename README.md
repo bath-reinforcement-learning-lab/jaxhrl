@@ -34,54 +34,7 @@ contains standalone scripts that import each algorithm's actual network and
 loss code and test it against toy environments from the original papers. Full write-ups, plots, and numbers are in
 [`verification/REPORT.md`](verification/REPORT.md). Summary:
 
-- **DCEO**: the Laplacian representation network recovers the true graph
-  Laplacian eigenvectors (cosine similarity ~0.7+ against an exact
-  ground-truth eigendecomposition on FourRooms, on the well-separated
-  eigenvalues).
-- **h-DQN**: reproduced Kulkarni et al.'s own toy stochastic decision
-  process — the hierarchical agent learns it, a flat DQN baseline with the
-  same network and step budget doesn't.
-- **Option Keyboard**: reproduced Barreto et al.'s own "Foraging World"
-  worked example at scale.
-- **HiPPO**: reproduced Li et al.'s own time-commitment ablation (Figure 3)
-  and skill-diversity/gradient-approximation diagnostic (Table 2) on a small
-  custom POMDP standing in for the paper's MuJoCo environments — HiPPO
-  (randomized or fixed period) solves the task while a p=1 ablation and flat
-  PPO both plateau at the same no-memory ceiling, and the approximate vs.
-  exact policy gradient stay in the same close-agreement regime the paper
-  reports.
-- **HAC**: verified. A mechanism-level suite (`hac_faithfulness.py`) runs the
-  training loop verifies the paper's defining properties of sparse reward, terminal discounts,
-  hindsight action transitions, hindsight goal relabelling, subgoal-testing
-  penalties (and their absence when disabled), the bounded critic with its
-  matched discount, and the nested schedule. All checks passed. 
-- **Option-Critic**: reproduced Bacon et al.'s four-rooms transfer test
-  (Figure 3) — options cost nothing on the stationary task (learning curves
-  superimposed on a flat actor-critic built from the same code path with
-  `num_options=1`), and after the goal is relocated the Option-Critic agents
-  recover faster (post-switch AUC 0.51 / 0.56 for 4 / 8 options vs 0.42 flat,
-  16 seeds). The learned options partition the
-  grid into spatially-coherent regions (Figure 4).
-- **MOC** (*Flexible Option Learning*): reproduced the paper's four-rooms
-  Figure 1b on the same task and harness as the Option-Critic check above,
-  swapping only the loss function. Learning the initial task from scratch, all
-  of flat / OC / MOC converge together; after the goal is relocated MOC
-  recovers to 0.99 return while OC reaches 0.80 and a flat agent 0.56 in the
-  same budget, and MOC's final-return seed std is 0.01 vs OC's 0.13 (16 seeds,
-  all 16 MOC seeds recover vs 8/16 OC). MOC does this by leaning on fewer
-  options (usage entropy 0.14 vs OC's 0.99) — the diversity/performance
-  trade-off the paper's η hyperparameter is meant to control.
-- **METRA** (*Metric-Aware Abstraction*): ran the unsupervised
-  training loop on a reward free FourRooms with a 2D skill space. The learned
-  abstraction φ recovers the shortest path geometry. 
-  Spearman 0.68 between φ-distance and true shortest-path distance, and φ in
-  2D reproduces the four-armed "cross" that classical MDS of the shortest path
-  matrix gives on every seed. Skills move φ in their commanded direction
-  (cos 0.66 vs 0.0 for a random policy), and closed loop skill selection from
-  φ reaches zero-shot goals it never trained on (mean distance 7.1 → 2.8,
-  within 2 success 66%), 5 seeds.
-
-Rerun any check with e.g. `python verification/dceo_verify.py`.
+Rerun any check with e.g. `python verification/<algorithm>_verify.py`.
 
 ## Running an algorithm
 
