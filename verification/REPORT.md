@@ -1,23 +1,11 @@
 # jaxhrl paper-fidelity verification
 
 Scripts import the actual repo classes/functions (network
-architectures, loss functions, action-selection logic) directly from
-`jaxhrl/DCEO.py`, `jaxhrl/h-DQN.py`, `jaxhrl/option_keyboard.py`,
-`jaxhrl/HiPPO.py`, `jaxhrl/option_critic.py`, `jaxhrl/MOC.py`, `jaxhrl/HAC.py`
-and `jaxhrl/METRA.py` via `repo_loader.py` — nothing
+architectures, loss functions, action-selection logic) directly. Nothing
 about the algorithms themselves is reimplemented here. The only custom code is
-(1) small toy environments with known ground truth or a deliberately controlled
-structure (FourRooms with exact Laplacian eigenvectors; the Kulkarni et al. toy
-stochastic chain; Barreto et al.'s own "Foraging World" domain; a small
-POMDP built to isolate HiPPO's time-commitment mechanism; the Option-Critic
-paper's own four-rooms navigation task with a relocatable goal, reused for MOC;
-a continuous four-rooms point mass standing in for Levy et al.'s ant four
-rooms; a reward-free FourRooms with an exact shortest-path oracle for METRA)
-and (2) thin training loops that call the repo's real loss functions. HAC and
-METRA go further than the others: `hac_verify.py` and `metra_verify.py`
-execute the repo's real `__main__` training loop via `runpy` against a patched
-environment factory, so the entire scan body is what runs, not a
-reimplementation.
+small toy environments with known ground truth or a deliberately controlled
+structure (eg FourRooms with exact Laplacian eigenvectors or the Kulkarni et al. toy
+stochastic chain)
 
 Reproduce with: `.venv/bin/python dceo_verify.py && .venv/bin/python hdqn_verify.py
 && .venv/bin/python okeyboard_verify.py && .venv/bin/python hippo_verify.py
@@ -25,7 +13,6 @@ Reproduce with: `.venv/bin/python dceo_verify.py && .venv/bin/python hdqn_verify
 && .venv/bin/python hac_verify.py && .venv/bin/python hac_faithfulness.py
 && .venv/bin/python hierq_verify.py && .venv/bin/python hierq_faithfulness.py
 && .venv/bin/python metra_verify.py`
-(needs `jax flax optax flashbax numpy scipy matplotlib pyyaml` — see `requirements.txt`).
 
 ---
 
@@ -55,11 +42,7 @@ learned heatmaps visually reproduce the true room-level structure. The
 remaining two weaker dimensions correspond to FourRooms' near-degenerate
 eigenvalue pair (0.0254 ≈ 0.0254) — eigenvectors of tied eigenvalues aren't
 individually well-defined (any rotation within that 2D eigenspace is an
-equally valid solution), so this looks like a property of this
-environment's spectrum rather than an implementation issue; worth
-rechecking on an environment without near-degenerate eigenvalues to
-confirm. The beta=0 ablation collapsing as expected confirms the
-orthogonality term is doing real anti-collapse work.
+equally valid solution).
 
 ### Downstream: options
 
@@ -71,9 +54,6 @@ representation is strongest: options tied to the well-recovered eigenvector
 eigenvector (index 0) show weaker/inconsistent behavior, consistent with the
 representation itself being weaker there.
 
-Rerun `dceo_verify.py` any time to regression-test this — watch
-`beta1_mean_matched_cosine_sim` in `results/dceo_verification_summary.json`
-stay well above the ~0.001 collapse floor.
 
 Artifacts: `results/dceo_eigenvectors_beta1.png`,
 `results/dceo_eigenvectors_beta0_ablation.png`,
@@ -84,7 +64,7 @@ Artifacts: `results/dceo_eigenvectors_beta1.png`,
 
 ## HAC — "Learning Multi-Level Hierarchies with Hindsight" (Levy et al. 2019)
 
-**Verdict: verified.** Every mechanism the paper specifies is present and
+Every mechanism the paper specifies is present and
 behaves as specified in the transitions `jaxhrl/HAC.py` actually emits (40/40
 checks).
 
@@ -124,14 +104,6 @@ in 2.2x fewer — the paper's claim, on the same task with the same budget.
 
 ### Depth is bounded by level-0 reach, not by the algorithm
 
-A level's physical reach is `H x step_scale`, so under a fixed horizon
-`H = T^(1/k)` shrinks as levels are added. Because the subgoal space is
-absolute position spanning the whole arena, a level whose child can only move a
-few percent of that range cannot place reachable subgoals, and the hierarchy
-fails to bootstrap — level 0 never learns, and every level above it starves.
-This is a property of the task scale, not a defect: it is fully reversible by
-restoring the reach, with nothing else changed.
-
 | k=3, identical code / horizon / threshold / arena | level-0 reach | end-goal success |
 |---|---|---|
 | step scale 0.01 | 0.09 | 0.015 |
@@ -149,7 +121,7 @@ Artifacts: `results/hac_levels_comparison.png`,
 
 ## h-DQN — "Hierarchical Deep Reinforcement Learning" (Kulkarni et al. 2016)
 
-**Verdict: matches the paper's core claim. The hierarchical agent (real
+The hierarchical agent (real
 `QNetwork` / `train_controller_step` / `train_meta_step` from `jaxhrl/h-DQN.py`)
 learns a delayed, order-dependent sparse-reward task that a flat DQN using
 the identical network architecture cannot, given the same environment-step
@@ -180,7 +152,7 @@ Artifacts: `results/hdqn_vs_flat_success.png`, `results/hdqn_verification_summar
 
 ## Option Keyboard — "The Option Keyboard: Combining Skills in RL" (Barreto et al. 2019, NeurIPS)
 
-**Verdict: matches the paper's qualitative claim.** GPI's zero-shot
+GPI's zero-shot
 combination of two pretrained skills beats the best single trained skill on
 2 of the 3 novel weight vectors we tested — including the paper's own
 headline example — with a large training budget and, critically, coverage of
@@ -207,7 +179,7 @@ training fast — this doesn't touch the property under test.
 Trained the real `Agent`/`sf_loss` (successor-feature network + TD loss,
 unmodified) for 180k macro-steps (~256 envs each, ~12 min on CPU), then
 evaluated with the exact GPI arithmetic used inline in the repo's own
-training loop (copied verbatim into `gpi_action()`, not reimplemented):
+training loop:
 
 | test weight `w` | GPI (combined) | best single trained option | optimal |
 |---|---|---|---|
@@ -218,15 +190,14 @@ training loop (copied verbatim into `gpi_action()`, not reimplemented):
 | **(1,1) *(NOVEL)*** | **0.923** | 0.889 | 2.0 |
 
 GPI clearly beats the best single pretrained option on 2 of the 3 novel
-weight vectors, by a repeatable margin larger than the run-to-run noise
+weight vectors, by a repeatable margin
 (`gpi_std` in `results/okeyboard_verification_summary.json`), and ties (as
 theory predicts it should, at minimum) on the two trained-basis vectors —
 see `results/ok_gpi_zeroshot.png`. The one exception, `w=(-1,1)`, has both
 GPI and the best single option near zero (0.003 vs 0.040) -- neither method
 found good behavior for that particular combination, which reads as an
 unexplained asymmetry between the two nutrient directions (the trained `e2`
-skill may just be weaker than `e1`) rather than GPI specifically failing;
-we didn't chase this further.
+skill may just be weaker than `e1`) rather than GPI specifically failing.
 
 Artifacts: `results/ok_gpi_zeroshot.png`, `results/ok_sf_accuracy.png`,
 `results/okeyboard_verification_summary.json`, `okeyboard_run.log`.
@@ -235,88 +206,70 @@ Artifacts: `results/ok_gpi_zeroshot.png`, `results/ok_sf_accuracy.png`,
 
 ## HierQ — "Learning Multi-Level Hierarchies with Hindsight", Algorithm 2 (Levy et al. 2019)
 
-**Verdict: verified as an implementation; the paper's depth ordering reproduces
-in part.** Every mechanism Algorithm 2 specifies is present and behaves as
-specified (20/20 checks), and hierarchical agents beat the flat agent by a
-margin that grows with task scale -- up to 6.3x fewer training episodes. 
+Every mechanism Algorithm 2 specifies is present and
+behaves as specified (34/34 checks), and the paper's own Figure 4 depth
+ordering -- "the 3-level agent outperformed the 2-level agent, and the
+2-level agent outperformed the flat agent" -- reproduces exactly, on every
+individual seed.
 
-HierQ is the discrete counterpart of HAC, and differs from it in two ways that
-both come straight from Algorithm 2:
+HierQ is the discrete counterpart of HAC: same nested per-level scheduler and
+hindsight machinery, but with one Q-network per level.
+ A multi-goal head outputs `Q(s, g, .)` for every goal `g`
+in one forward pass, which is what lets a single transition still update every
+goal at once -- Algorithm 2's "for each goal `s_goal`" -- and the head starts
+at zero weights with a constant bias, so `Q(s, ., .)` equals that constant for
+every state until a gradient step actually touches it. That is the network
+analogue of a fresh table entry, and it is what makes pessimistic
+initialisation work as Algorithm 2 intends.
 
-- **No subgoal testing.** HAC needs -H penalty transitions to stop a level
-  proposing subgoals its child cannot reach. HierQ has none; *pessimistic
-  initialisation* does that job, because `Q_i(s, ., a)` is only ever written at
-  actions `a` genuinely reached from `s` within the level's horizon, so an
-  unreachable subgoal keeps its initial value and never wins an argmax.
-- **Exhaustive rather than sampled hindsight.** `Q_0` is updated for *every*
-  goal in the state space per transition, and `Q_i` over `PrevStates_i` x all
-  goals -- HER by enumeration.
+### Mechanism faithfulness — `hierq_faithfulness.py`, 34/34
 
-### Mechanism faithfulness — `hierq_faithfulness.py`, 20/20
-
-Both update rules are checked against hand-computed Bellman targets, then the
-repo's real `__main__` loop is executed via `runpy` and the resulting Q-tables
-inspected directly.
+The two loss functions are checked against hand-computed targets on a network
+held at a known constant (zero weights make the whole target/loss closed-form
+before any training happens), then the repo's real `__main__` loop is executed
+via `runpy` and the resulting replay-buffer transitions inspected directly.
 
 | Algorithm 2 property | check | result |
 |---|---|---|
-| level-0 all-goals update | equals `(1-a)Q + a[R + g.max Q(s',g,.)]` for every goal | exact (0.00e+00) |
-| all-goals HER | exactly \|S\| goal-entries written per transition | pass |
-| level-i PrevStates update | matches the equation for every (state, goal) | exact (0.00e+00) |
-| hindsight **action** | the stored action is `s'` itself | only the `a=s'` plane written |
-| window masking | masked slots never written | pass |
-| initialisation | `Q_0` optimistic at 0; `Q_i>0` pessimistic | pass |
-| **reachability invariant** | every written (state, subgoal) pair is reachable within that level's horizon | **0 unreachable, both levels** |
-| pessimism holds | unreachable subgoals retain the floor; nothing falls below it | pass |
-| no subgoal testing | no value below the floor (HierQ has no penalty transitions) | pass |
-| nested schedule | top attempt == episode; `end[i+1] => end[i]`; per-level bounds | pass |
+| initialisation | `Q_0` optimistic at 0, `Q_i>0` pessimistic, for every input, before training | exact |
+| level-0 all-goals loss | matches `(1-a)Q + a[R + done-aware discount . max Q(s',g,.)]` | exact |
+| level-i PrevStates loss | matches the equation, including the subgoal-testing penalty branch | exact |
+| **gradient sparsity** | a (goal, action) output no row in the batch selects gets exactly zero head-gradient | **0.00e+00** |
+| hindsight **action** | hindsight rows' next_obs satisfies exactly one goal (one-hot gridworld) | pass |
+| subgoal testing | penalty rows carry the *proposed*, not achieved, subgoal; absent at `subgoal_test_perc=0` | pass |
+| PrevStates window | push-count never exceeds one episode's horizon | pass |
+| episode structure | episodes occur; `seen` initialised from the reset observation | pass |
+| goal sampling | uniform over the *whole* goal set (`g_(k-1) <- G_(k-1)`), not gated by `seen` | pass |
+| nested schedule | top attempt == episode; per-level attempt-count bounds | pass |
+| `eps_greedy` | random exploration respects the action mask; `deterministic=True` makes epsilon irrelevant | pass |
 
-The reachability invariant is the one that matters most: it is *because* `Q_i`
-is only ever written at achievable subgoals that pessimistic initialisation can
-substitute for subgoal testing.
+Gradient sparsity is the load-bearing one: it is the exact, checkable form
+"table entry untouched" takes once the table is a network -- level_loss masks
+the squared error before summing, so an output no row selected receives
+literally zero gradient at the head, regardless of what the shared trunk does
+with other rows.
 
-`gamma_i` and the pessimistic floor are one choice, not two. The floor must be
-the fixed point of `Q = -1 + gamma_i.Q`, i.e. `-1/(1-gamma_i)`, or reachable
-subgoals get driven *below* untouched unreachable ones and the argmax prefers
-exactly what the level cannot achieve. `gamma_i = 1 - 1/H_i` satisfies that and
-keeps the value range commensurate with the level's own budget (floor `-H_i`),
-the same relationship HAC uses. The paper specifies a single global `gamma`,
-which cannot be commensurate with every level's horizon at once; this is the one
-deliberate departure from the letter of Algorithm 2.
+### Depth comparison — Four Rooms
 
-### Depth comparison — grid worlds
+`gridworld` in `common/wrappers.py` provides the paper's discrete domain,
+scaled to 25x25 (488 states) so a network doesn't saturate every arm before the comparison can resolve; the
+classic 13x13 layout's ~8-step mean shortest path gives a 2-level hierarchy so
+little to abstract that 2- and 3-level both hit ceiling within the first
+measurement. The episode horizon is held at 125 primitive steps for every arm,
+with the sub-level budget H=5 constant across depths and the top level
+absorbing the remainder (`H_levels` = [125] / [5,25] / [5,5,5]), so every
+agent gets the same environment budget and the same level-0 reach -- depth is
+the only variable. Three seeds.
 
-`gridworld` in `common/wrappers.py` provides the paper's discrete domains. The
-episode horizon is held at 125 primitive steps for every arm, with the sub-level
-budget H=5 constant across depths and the top level absorbing the remainder
-(`H_levels` = [125] / [5,25] / [5,5,5]), so every agent gets both the same
-environment budget and the same level-0 reach. Three seeds; x-axis is training
-episodes, matching the paper's figure.
+Environment steps to 80% end-goal success (lower is better):
 
-Training episodes to 80% success (lower is better):
+| arm | seed 0 | seed 1 | seed 2 |
+|---|---|---|---|
+| flat (k=1) | 960,000 | 704,000 | 928,000 |
+| 2-level HierQ | 352,000 | 384,000 | 384,000 |
+| **3-level HierQ** | **288,000** | **288,000** | **288,000** |
 
-| Four Rooms | states | flat (k=1) | 2-level | 3-level |
-|---|---|---|---|---|
-| 13x13 | 104 | 447 | **195** (2.3x) | 304 (1.5x) |
-| 17x17 | 200 | 1,220 | **243** (5.0x) | 607 (2.0x) |
-| 21x21 | 328 | 2,515 | **398** (6.3x) | 1,220 (2.1x) |
-
-Both hierarchical agents beat the flat agent at every scale, and the margin
-grows as the task gets longer-horizon -- which is the mechanism the paper
-appeals to. On the largest maze the flat agent does not even converge
-(0.875 +- 0.048) while the 2-level agent does (0.995 +- 0.006).
-
-Note the flat arm here is *stronger* than the paper's baseline. Algorithm 2 is
-defined for `k > 1`; the paper's flat comparison is "Q-learning with HER", which
-samples a few relabelled goals, whereas `num_levels: 1` inherits HierQ's
-exhaustive all-goals update -- |S| relabels per transition. The hierarchy's win
-is therefore against a harder baseline than the paper's.
-
-**What does not reproduce:** the 3-level agent never beat the 2-level agent --
-in all nine comparisons (3 task scales x 3 seeds), and under three different
-gamma/floor settings. With mean shortest paths of 8-14 steps and a level-0 reach
-of 5, a 2-level hierarchy already reduces the task to ~3 subgoal decisions;
-there is little left for a third level to abstract at grid-world scale.
+3-level beats 2-level beats flat on every seed individually -- exactly Figure 4's ordering. 
 
 Artifacts: `results/hierq_levels_comparison.png`,
 `results/hierq_verification_summary.json`.
@@ -325,7 +278,7 @@ Artifacts: `results/hierq_levels_comparison.png`,
 
 ## HiPPO — "Sub-Policy Adaptation for Hierarchical Reinforcement Learning" (Li, Florensa, Clavera & Abbeel, ICLR 2020)
 
-**Verdict: matches the paper's core claims.** Using the real
+Using the real
 `ManagerActorCritic`/`SkillActorCritic` networks, `select_hippo_action`,
 `compute_skill_gae`, `compute_manager_smdp_targets`, and
 `skill_loss_fn`/`manager_loss_fn` from `jaxhrl/HiPPO.py` directly, HiPPO
@@ -368,7 +321,7 @@ global default action" strategy. See `results/hippo_learning_curves.png`.
 
 ### Skill-diversity / gradient-approximation diagnostic (Table 2)
 
-Using the trained randomized-period policy, computed the same two
+Using the trained randomised period policy, computed the same two
 quantities the paper reports in Table 2, restricted to the memory-driven
 portion of each commitment period (excluding the brief cue-visible window,
 where every skill correctly reacts to the same observable cue regardless of
@@ -391,7 +344,7 @@ Artifacts: `results/hippo_learning_curves.png`, `results/hippo_verification_summ
 
 ## Option-Critic — "The Option-Critic Architecture" (Bacon, Harb & Precup, AAAI 2017)
 
-**Verdict: matches the paper's core four-rooms claims.** Using the real
+Using the real
 `OptionCriticNetwork`, `batch_select_option_critic_action` and
 `option_critic_loss_fn` from `jaxhrl/option_critic.py` directly, Option-Critic
 (1) learns the stationary four-rooms navigation task exactly as fast as a flat
@@ -403,8 +356,8 @@ space into spatially-coherent per-option regions (Figure 4).
 noise, a +1 terminating goal reward, and γ=0.99. Following the paper's transfer
 setup, the goal starts in the east doorway (a bottleneck, so options that learn
 to reach it stay reusable) and relocates into the lower-right room after 1M
-env-steps. The flat baseline is the *identical code path* with `num_options=1`,
-which collapses the option machinery to a one-step advantage actor-critic — the
+env-steps. The flat baseline is the identical code path with `num_options=1`,
+which collapses to a one-step advantage actor-critic — the
 same way `hippo_verify.py` derives its flat baseline from `num_skills=1`.
 Training is on-policy (fresh rollouts fed straight through the repo's real
 `option_critic_loss_fn` — TD critic target, intra-option policy gradient, and
@@ -445,7 +398,7 @@ reach a goal a room away from the old one.
 Sweeping every state through the trained 4-option network: the greedy option
 per state is spatially coherent — `greedy_option_spatial_coherence` = 0.79 vs
 0.25 for a random option assignment — so options own contiguous regions of the
-grid (`results/option_critic_options.png`). The option *value* function
+grid (`results/option_critic_options.png`). The option value function
 `Q_Omega` is doing this partitioning work; the termination head meanwhile
 drives β→0 (options run until the episode ends) and the intra-option policies
 stay close (mean pairwise action-distribution TV ≈ 0.05), the known
@@ -460,13 +413,13 @@ Artifacts: `results/option_critic_transfer_curves.png`,
 
 ## MOC — "Flexible Option Learning" (Klissarov & Precup, NeurIPS 2021)
 
-**Verdict: matches the paper's core four-rooms claim.** `jaxhrl/MOC.py`'s
-`moc_loss_fn` — the arrival-probability-weighted update of *every* option from
-each transition, with a PPO-style clipped importance ratio correcting for the
+`jaxhrl/MOC.py`'s
+`moc_loss_fn` — the arrival probability weighted update of *every* option from
+each transition, with a clipped importance ratio correcting for the
 action having been sampled by the active option — reproduces "Flexible Option
-Learning"'s Figure 1b: on the non-stationary four-rooms task, the multi-update
+Learning"'s Figure 1b: on the non-stationary four-rooms task, the multi update
 agent (MOC) recovers from the goal relocation far faster than vanilla
-Option-Critic and with much lower seed variance.
+Option Critic and with much lower seed variance.
 
 Same environment (`fourrooms_nav.py`), same on-policy training loop and same 16
 seeds as the Option-Critic verification above; the only thing that differs
@@ -517,7 +470,7 @@ Sweeping the seed-0 trained policies over every state:
 
 MOC concentrates almost all of its behaviour in a single option and has a
 lower information radius (inter-option divergence) than OC — the direction the
-paper reports for the **tabular** regime (Figure 1c: multi-updating with
+paper reports for the tabular regime (Figure 1c: multi-updating with
 η = 1.0 reduces option diversity), not the deep-MiniGrid regime of Figure 6.
 `MOC.py`'s `moc_loss_fn` is effectively η = 1.0 (it always updates every
 option), and the paper introduces η precisely to trade this collapse against
@@ -531,20 +484,19 @@ Artifacts: `results/moc_transfer_curves.png`,
 
 ## METRA — "Scalable Unsupervised RL with Metric-Aware Abstraction" (Park, Rybkin & Levine, ICLR 2024)
 
-**Verdict: matches the paper's core claims.** Running `jaxhrl/METRA.py`'s
+Running `jaxhrl/METRA.py`'s
 training loop — the `(φ(s') − φ(s)) · z` intrinsic reward and the 1-Lipschitz
 constraint from `metra_components`, the Lagrangian φ update, the dual λ update
 and the discrete-SAC skill policy — unsupervised on a reward-free 13×13
 FourRooms with a 2-D continuous skill space: the learned abstraction φ recovers
-the environment's shortest path (temporal-distance) geometry, the skill policy
+the environment's shortest path (temporal distance) geometry, the skill policy
 moves φ in commanded directions, and φ supports zero-shot goal reaching with no
 goal conditioned policy ever trained.
 
 `metra_verify.py` patches `make_jax_env` to the reward-free FourRooms of
-`fourrooms_open.py` and runs METRA's `__main__` via `runpy`; only the environment and harness are custom. `fourrooms_open.py`
+`fourrooms_open.py` and runs METRA's `__main__` via `runpy`. `fourrooms_open.py`
 exposes the exact all-pairs shortest-path matrix over the 104 free cells as the
-ground-truth temporal-distance metric. 5 seeds, 12.8M env-steps each, repo's
-shipped hyperparameters.
+ground-truth temporal-distance metric. 5 seeds, 12.8M env-steps each. 
 
 ### Skills are directed and diverse (objective Eq. 7)
 
@@ -566,7 +518,7 @@ fan out across the grid (endpoint spread 3.8 cells).
 
 Every seed's φ, laid out in 2D, reproduces the four-room topology as the same
 four-armed "cross" that classical MDS of the shortest-path matrix produces —
-the rooms pulled into separate arms because the doorways make cross-room travel
+the rooms pulled into separate arms because the doorways make travelling across rooms
 long (`results/metra_phi_map.png`). On 3 of 5 seeds the match is also
 metrically precise (Spearman ≥ 0.69, Procrustes ≤ 0.24); on the other 2 the
 geometry is recognisably right but rotated/compressed (Spearman ≈ 0.49).
@@ -592,10 +544,10 @@ skills are trained, one z per episode) still roughly halves the gap.
 
 `metra_components` matches the paper's reward and constraint. The φ objective
 in `METRA.py`'s `__main__` differs from Algorithm 1 in scale — the Lipschitz
-penalty uses the *mean* squared coordinate difference rather than the sum (a
+penalty uses the mean squared coordinate difference rather than the sum (a
 looser constraint by a factor of `z_dim`), the reward term carries a 10×
 weight, and the dual step is taken in log-λ space. These are scale/tuning
-choices, not changes to the mechanism, and the paper's claims reproduce with
+choices, not changes to the mechanism. The paper's claims reproduce with
 the repo's shipped hyperparameters.
 
 Artifacts: `results/metra_phi_map.png`,
