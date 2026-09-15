@@ -32,7 +32,7 @@ Our implementations run very fast. HiPPO runs at ~73000 env-steps/s on a single 
 [`verification/`](verification/)
 contains standalone scripts that import each algorithm's actual network and
 loss code and test it against toy environments from the original papers. Full write-ups, plots, and numbers are in
-[`verification/REPORT.md`](verification/REPORT.md). Summary:
+[`verification/REPORT.md`](verification/REPORT.md).
 
 Rerun any check with e.g. `python verification/<algorithm>_verify.py`.
 
