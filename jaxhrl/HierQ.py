@@ -18,7 +18,6 @@ from jaxhrl.common.logger import Logger
 from jaxhrl.common.wrappers import make_jax_env
 
 
-
 class MultiGoalQNetwork(nnx.Module):
     """Q(s, g, a) for every goal g at once: (batch, num_goals, num_actions).
 
@@ -52,6 +51,13 @@ class MultiGoalQNetwork(nnx.Module):
 
 def eps_greedy(q_rows, key, epsilon, explore_mask, deterministic):
     """epsilon-greedy over Q(s, g, .) for one goal per env.
+
+    `explore_mask` restricts random exploration to allowed actions -- for
+    subgoal levels, goals that have been achieved at least once, since
+    proposing a goal nobody has ever seen achieved wastes a whole child
+    attempt. `deterministic` suppresses exploration while a subgoal is under
+    test. Ties are broken randomly: subgoal levels start pessimistically
+    initialised, so every entry of a fresh row is identical.
     """
     n = q_rows.shape[0]
     tie_key, rand_key, coin_key = jax.random.split(key, 3)
@@ -64,6 +70,17 @@ def eps_greedy(q_rows, key, epsilon, explore_mask, deterministic):
 
 def level_loss(model, target_model, batch, achieved_fn, gamma, q_limit, subgoal_level):
     """All-goals TD loss for one level.
+
+    For every goal g at once: reward 0 if g is achieved at s', else -1; the
+    discount is 0 if g is achieved or the environment terminated on this
+    transition, else gamma; target = r + discount * max_a' Q'(s', g, a').
+
+    Level 0 regresses Q(s, g, a) at the primitive action taken. A subgoal level
+    regresses Q(s, g, a) at every subgoal a achieved at s' (the hindsight action
+    transition); a subgoal-testing penalty row instead regresses the PROPOSED
+    subgoal toward -q_limit with discount 0, for every goal, since "this
+    subgoal is unreachable from s" does not depend on which goal is being
+    pursued.
     """
     obs = batch["obs"].astype(jnp.float32)
     nxt = batch["next_obs"].astype(jnp.float32)
@@ -108,7 +125,10 @@ def train_level_step(model, target_model, opt, batch, achieved_fn,
 
 
 # ---------------------------------------------------------------------------
-# Replay: a masked ring buffer per level
+# Replay: a masked ring buffer per level. Subgoal levels write a variable
+# number of rows per env per step -- a hindsight row always, a subgoal-testing
+# penalty row only sometimes -- and the scatter below writes exactly the valid
+# ones.
 # ---------------------------------------------------------------------------
 
 class Ring(NamedTuple):
@@ -137,9 +157,11 @@ def ring_sample(ring: Ring, key: jax.Array, batch_size: int):
 
 
 class ObsWindow(NamedTuple):
-    """PrevStates_i: the last prod(H_levels[:i]) observations since the world
-    last reset -- exactly the states from which the current one was reachable
-    within one level-i action."""
+    """PrevStates_i: a rolling record of the last prod(H_levels[:i])
+    observations visited this episode -- exactly the states from which the
+    current one was reachable within one level-i action. Cleared on episode
+    reset. `count` is both the write cursor (count % capacity) and the fill
+    level, so it must stay monotonic within an episode."""
     obs: jax.Array     # (num_envs, capacity, obs_dim) uint8
     count: jax.Array   # (num_envs,) int32
 
@@ -149,19 +171,51 @@ def where_per_env(done_mask, a, b):
     return jnp.where(reshaped, a, b)
 
 
+def close_out(achieved, env_done, attempt_count, H_levels, k, n):
+    """Two-pass attempt close-out, shared by every level-scheduling loop in
+    this file (and reusable by any alternate training protocol built on top).
+
+    Pass 1 computes local_end[i-1] rather than end[i-1] (which would be
+    circular: end[i-1] depends on end[i], which depends on level i's action
+    completing, which IS end[i-1]); the suffix-OR in pass 2 then applies
+    ancestor unwinding, so a higher level's goal being hit mid-attempt
+    correctly aborts every level below it. Returns `end`: (n, k) bool, where
+    end[:, i] is true wherever level i's current attempt just ended.
+    """
+    local_end = []
+    prev_local = jnp.ones((n,), jnp.bool_)
+    for i in range(k):
+        out_of_actions = jnp.logical_and(prev_local, attempt_count[:, i] >= H_levels[i])
+        le = achieved[:, i] | env_done | out_of_actions
+        local_end.append(le)
+        prev_local = le
+    end = [None] * k
+    suffix = jnp.zeros((n,), jnp.bool_)
+    for i in range(k - 1, -1, -1):
+        suffix = jnp.logical_or(local_end[i], suffix)
+        end[i] = suffix
+    return jnp.stack(end, axis=1)
+
+
+def sample_goals(key, num_goals, n):
+    """Algorithm 2's g_(k-1) <- G_(k-1): a task goal sampled uniformly over
+    the whole goal set, independent of what has been seen so far."""
+    return jax.random.randint(key, (n,), 0, num_goals).astype(jnp.int32)
+
+
 class LoopCarry(NamedTuple):
     nnx_states: tuple           # length k; per level (model, target, optimizer)
     rings: tuple                # length k
     windows: tuple              # length k-1; ObsWindow for levels 1..k-1
     env_state: Any
     obs: jax.Array              # (num_envs, obs_dim) float32
-    goal_stack: jax.Array       # (num_envs, k) int32 goal indices; [:, k-1] is the commanded goal
+    goal_stack: jax.Array       # (num_envs, k) int32 goal indices; [:, k-1] is the task goal
     action_start_obs: jax.Array # (num_envs, k, obs_dim) uint8 -- obs when level i began its current action
     attempt_count: jax.Array    # (num_envs, k) int32
     testing: jax.Array          # (num_envs, k) bool -- level i acts deterministically
     needs_new_goal: jax.Array   # (num_envs, k) bool -- `end` from the previous step
-    seen: jax.Array             # (num_goals,) bool -- goals ever achieved
-    ep_step: jax.Array          # (num_envs,) int32 -- steps into the current goal attempt
+    seen: jax.Array             # (num_goals,) bool -- goals ever achieved (exploration guard only)
+    ep_step: jax.Array          # (num_envs,) int32
     stats: jax.Array            # (k, 2) cumulative [attempts, successes]
     step: jax.Array
     rng: jax.Array
@@ -172,7 +226,7 @@ if __name__ == "__main__":
     config = parse_config()
     logger = Logger(config)
 
-    framework_type = config["env"].get("framework", "gc_craftax")
+    framework_type = config["env"].get("framework", "gridworld")
     env_id = config["env"]["make"]["id"].split("/")[-1]
     env_kwargs = config["env"].get("kwargs", {}) or {}
 
@@ -186,18 +240,9 @@ if __name__ == "__main__":
     buffer_size = tc.get("buffer_size", 200_000)
     lr = tc.get("lr", 3e-4)
     tau = tc.get("tau", 0.01)
+    epsilon = tc.get("epsilon", 0.2)
     subgoal_test_perc = tc.get("subgoal_test_perc", 0.3)
     hidden_dim = tc.get("hidden_dim", 512)
-
-    # Exploration: linear decay, as LEO's optax.linear_schedule.
-    epsilon_start = tc.get("epsilon_start", 0.2)
-    epsilon_finish = tc.get("epsilon_finish", 0.01)
-    epsilon_decay_steps = max(1, int(tc.get("epsilon_decay", 0.2) * n_steps))
-
-    # LEO's greedy test protocol.
-    test_interval_chunks = tc.get("test_interval_chunks", 5)
-    test_num_repeats = tc.get("test_num_repeats", 16)
-    test_num_steps = tc.get("test_num_steps", 512)
 
     wrapped = make_jax_env(framework_type, env_id, cumulant_dim=1, **env_kwargs)
     assert wrapped.goal_fn is not None and wrapped.num_goals > 0, (
@@ -208,8 +253,9 @@ if __name__ == "__main__":
     goal_names = getattr(wrapped.env, "goal_names", None) or [f"goal_{g}" for g in range(G)]
     goal_fn_batch = jax.vmap(wrapped.goal_fn)
 
-    # Per-level action budgets: sub-levels hold H, the top level absorbs the rest
-    # of `horizon` 
+    # Per-level action budgets: sub-levels hold H, the top level absorbs the
+    # rest of `horizon` (Levy's structure). gamma_i and the Q floor are one
+    # choice: gamma_i = 1 - 1/H_i makes the worst-case return exactly -H_i.
     horizon_cfg = tc.get("horizon", None)
     top_H = max(1, int(round(horizon_cfg / (H ** (k - 1))))) if horizon_cfg else H
     H_levels = [H] * (k - 1) + [top_H]
@@ -219,6 +265,9 @@ if __name__ == "__main__":
     level_actions = [n_actions] + [G] * (k - 1)     # subgoals are goal indices
     window_caps = [int(np.prod(H_levels[:i])) for i in range(1, k)]
     assert buffer_size >= 2 * num_envs, "buffer_size must hold one step's writes (2 x num_envs)"
+
+    def close_out_(achieved, env_done, attempt_count, n):
+        return close_out(achieved, env_done, attempt_count, H_levels, k, n)
 
     seed = config["seed"]
     key = jax.random.PRNGKey(seed)
@@ -255,34 +304,10 @@ if __name__ == "__main__":
     vmap_step = jax.jit(jax.vmap(wrapped.step_fn, in_axes=(0, 0, 0)))
     env_idx = jnp.arange(num_envs)
 
-    def epsilon_at(step):
-        frac = jnp.clip(step.astype(jnp.float32) / epsilon_decay_steps, 0.0, 1.0)
-        return epsilon_start + (epsilon_finish - epsilon_start) * frac
-
-    def sample_task_goals(skey, seen, n):
-        """LEO's autocurriculum: uniform over goals seen at least once."""
-        return jax.random.categorical(skey, jnp.where(seen, 0.0, -1e9), shape=(n,)).astype(jnp.int32)
-
-    def close_out(achieved, env_done, attempt_count, n):
-        local_end = []
-        prev_local = jnp.ones((n,), jnp.bool_)
-        for i in range(k):
-            out_of_actions = jnp.logical_and(prev_local, attempt_count[:, i] >= H_levels[i])
-            le = achieved[:, i] | env_done | out_of_actions
-            local_end.append(le)
-            prev_local = le
-        end = [None] * k
-        suffix = jnp.zeros((n,), jnp.bool_)
-        for i in range(k - 1, -1, -1):
-            suffix = jnp.logical_or(local_end[i], suffix)
-            end[i] = suffix
-        return jnp.stack(end, axis=1)
-
     # ---- Training Loop Core ----
     def scan_body(carry: LoopCarry, step_key):
-        (rng, select_key, test_key, goal_key,
-         win_key, train_key) = jax.random.split(carry.rng, 6)
-        eps_now = epsilon_at(carry.step)
+        (rng, select_key, test_key, reset_key, goal_key,
+         win_key, train_key) = jax.random.split(carry.rng, 7)
 
         obs = carry.obs
         goal_stack = carry.goal_stack
@@ -302,7 +327,7 @@ if __name__ == "__main__":
         for i in range(k - 2, -1, -1):
             parent = i + 1
             rows = models[parent](obs)[env_idx, goal_stack[:, parent]]        # (N, G)
-            proposed = eps_greedy(rows, select_keys[parent], eps_now, carry.seen,
+            proposed = eps_greedy(rows, select_keys[parent], epsilon, carry.seen,
                                   testing[:, parent])
             refresh = needs[:, i]
             goal_stack = goal_stack.at[:, i].set(jnp.where(refresh, proposed, goal_stack[:, i]))
@@ -315,9 +340,9 @@ if __name__ == "__main__":
         obs_u8 = obs.astype(jnp.uint8)
         action_start_obs = jnp.where(acted[:, :, None], obs_u8[:, None, :], carry.action_start_obs)
 
-        # ---- Level 0 acts, environment steps (auto-resetting on termination) ----
+        # ---- Level 0 acts, environment steps ----
         rows0 = models[0](obs)[env_idx, goal_stack[:, 0]]                     # (N, A)
-        action = eps_greedy(rows0, select_keys[0], eps_now,
+        action = eps_greedy(rows0, select_keys[0], epsilon,
                             jnp.ones((n_actions,), jnp.bool_), testing[:, 0])
         step_keys = jax.random.split(step_key, num_envs)
         obs2, env_state2, _, env_done, _ = vmap_step(step_keys, carry.env_state, action)
@@ -325,10 +350,10 @@ if __name__ == "__main__":
 
         ach_now = goal_fn_batch(obs2)                                          # (N, G)
         achieved = jnp.take_along_axis(ach_now, goal_stack, axis=1)            # (N, k)
-        end = close_out(achieved, env_done, attempt_count, num_envs)
-        # The commanded goal's attempt is over: reached, out of actions, or the
-        # world terminated. A new goal is commanded from the current state.
-        goal_done = end[:, k - 1]
+        end = close_out_(achieved, env_done, attempt_count, num_envs)
+        # Literal Algorithm 2: the episode ends exactly when the task goal's
+        # attempt ends (achieved, out of actions, or the env itself ended).
+        episode_done = end[:, k - 1]
         completes = jnp.concatenate(
             [jnp.ones((num_envs, 1), jnp.bool_), end[:, :k - 1]], axis=1)
 
@@ -360,9 +385,7 @@ if __name__ == "__main__":
             }
             mask = jnp.concatenate([fill > 0, pen_mask])
             new_rings.append(ring_add(carry.rings[i], rows, mask, buffer_size))
-            # A state from before the world reset is not a predecessor of the
-            # current one, so the window is only cleared on true termination.
-            new_windows.append(w._replace(count=jnp.where(env_done, 0, w.count)))
+            new_windows.append(w)
 
         # ---- Per-level updates ----
         train_keys = jax.random.split(train_key, k)
@@ -386,11 +409,20 @@ if __name__ == "__main__":
             losses.append(loss)
             trained.append(should_train)
 
-        # ---- Goal chaining: command a new goal wherever the attempt ended ----
+        # ---- Episode reset (after all writes, on the pre-reset observation) ----
+        reset_obs, reset_state = vmap_reset(jax.random.split(reset_key, num_envs))
+        obs_next = where_per_env(episode_done, reset_obs, obs2)
+        env_state_next = jax.tree.map(
+            lambda a, b: where_per_env(episode_done, a, b), reset_state, env_state2)
         seen_next = carry.seen | ach_now.any(axis=0)
-        new_goals = sample_task_goals(goal_key, seen_next, num_envs)
+        new_task_goals = sample_goals(goal_key, G, num_envs)
         goal_stack_next = goal_stack.at[:, k - 1].set(
-            jnp.where(goal_done, new_goals, goal_stack[:, k - 1]))
+            jnp.where(episode_done, new_task_goals, goal_stack[:, k - 1]))
+        action_start_obs_next = jnp.where(
+            episode_done[:, None, None], reset_obs.astype(jnp.uint8)[:, None, :], action_start_obs)
+        attempt_count_next = jnp.where(episode_done[:, None], 0, attempt_count)
+        testing_next = jnp.where(episode_done[:, None], False, testing)
+        new_windows = [w._replace(count=jnp.where(episode_done, 0, w.count)) for w in new_windows]
 
         attempts_delta = jnp.sum(end.astype(jnp.float32), axis=0)
         success_delta = jnp.sum(jnp.logical_and(end, achieved).astype(jnp.float32), axis=0)
@@ -399,15 +431,15 @@ if __name__ == "__main__":
             nnx_states=tuple(new_states),
             rings=tuple(new_rings),
             windows=tuple(new_windows),
-            env_state=env_state2,
-            obs=obs2,
+            env_state=env_state_next,
+            obs=obs_next,
             goal_stack=goal_stack_next,
-            action_start_obs=action_start_obs,
-            attempt_count=jnp.where(goal_done[:, None], 0, attempt_count),
-            testing=jnp.where(goal_done[:, None], False, testing),
+            action_start_obs=action_start_obs_next,
+            attempt_count=attempt_count_next,
+            testing=testing_next,
             needs_new_goal=end,
             seen=seen_next,
-            ep_step=jnp.where(goal_done, 0, carry.ep_step + 1),
+            ep_step=jnp.where(episode_done, 0, carry.ep_step + 1),
             stats=carry.stats + jnp.stack([attempts_delta, success_delta], axis=-1),
             step=carry.step + 1,
             rng=rng,
@@ -419,20 +451,71 @@ if __name__ == "__main__":
                  & (attempt_count[:, i - 1] >= H_levels[i - 1]) & ~achieved[:, i - 1]
                  ).astype(jnp.float32))
         metrics = {
-            "goal_done": goal_done,
-            "goal_success": jnp.logical_and(goal_done, achieved[:, k - 1]),
-            "env_done": env_done,
-            "attempt_len": jnp.where(goal_done, carry.ep_step + 1, 0),
+            "episode_done": episode_done,
+            "end_goal_reached": jnp.logical_and(episode_done, achieved[:, k - 1]),
+            "ep_len_completed": jnp.where(episode_done, carry.ep_step + 1, 0),
             "losses": jnp.stack(losses),
             "trained": jnp.stack(trained),
             "penalties": penalties,
-            "epsilon": eps_now,
         }
         return new_carry, metrics
 
     @partial(jax.jit, donate_argnums=0)
     def run_chunk(carry, keys):
         return jax.lax.scan(scan_body, carry, keys)
+
+    key, reset_key0, goal_key0 = jax.random.split(key, 3)
+    obs0, state0 = vmap_reset(jax.random.split(reset_key0, num_envs))
+    seen0 = goal_fn_batch(obs0).any(axis=0)
+    goal_stack0 = jnp.zeros((num_envs, k), jnp.int32).at[:, k - 1].set(
+        sample_goals(goal_key0, G, num_envs))
+
+    carry = LoopCarry(
+        nnx_states=tuple(level_states),
+        rings=tuple(rings0),
+        windows=tuple(windows0),
+        env_state=state0,
+        obs=obs0,
+        goal_stack=goal_stack0,
+        action_start_obs=jnp.broadcast_to(obs0.astype(jnp.uint8)[:, None, :], (num_envs, k, obs_dim)),
+        attempt_count=jnp.zeros((num_envs, k), jnp.int32),
+        testing=jnp.zeros((num_envs, k), jnp.bool_),
+        needs_new_goal=jnp.ones((num_envs, k), jnp.bool_),
+        seen=seen0,
+        ep_step=jnp.zeros((num_envs,), jnp.int32),
+        stats=jnp.zeros((k, 2), jnp.float32),
+        step=jnp.array(0, jnp.int32),
+        rng=key,
+    )
+
+    def run_and_log(carry, key, n, step0):
+        prev_stats = jax.device_get(carry.stats)
+        carry, metrics = run_chunk(carry, jax.random.split(key, n))
+        metrics = jax.device_get(metrics)
+        chunk_stats = jax.device_get(carry.stats) - prev_stats
+
+        episodes = int(np.sum(metrics["episode_done"]))
+        success = float(np.sum(metrics["end_goal_reached"]) / max(episodes, 1))
+        seen = int(np.sum(jax.device_get(carry.seen)))
+        env_steps0 = step0 * num_envs
+        chunk_metrics = {
+            "train/end_goal_success_rate": success,
+            "train/episodes": episodes,
+            "train/episode_len_mean": float(np.sum(metrics["ep_len_completed"]) / max(episodes, 1)),
+            "train/goals_seen": seen,
+            "train/penalties_per_step": float(np.mean(metrics["penalties"])),
+        }
+        for i in range(k):
+            n_tr = max(int(np.sum(metrics["trained"][:, i])), 1)
+            chunk_metrics[f"train/level_{i}/loss"] = float(np.sum(metrics["losses"][:, i]) / n_tr)
+            chunk_metrics[f"levels/success_rate_level_{i}"] = float(
+                chunk_stats[i, 1] / max(chunk_stats[i, 0], 1))
+        logger.log_metrics(chunk_metrics, step=env_steps0)
+
+        print(f"Steps {step0}-{step0 + n} | end-goal success {success:.3f} "
+              f"({episodes} episodes) | seen {seen}/{G} | "
+              + " ".join(f"L{i}={chunk_metrics[f'train/level_{i}/loss']:.3f}" for i in range(k)))
+        return carry
 
     # Main Execution and Evaluation Loop
     from jaxhrl.common.utils import StepScheduler
@@ -455,50 +538,42 @@ if __name__ == "__main__":
         action = jnp.argmax(models[0](obs[None])[0, goal_stack[0]]).astype(jnp.int32)
         return action, goal_stack, attempt_count
 
-    def make_eval_policy_fn(nnx_states, seen):
+    def make_eval_policy_fn(nnx_states):
         """Per-episode closure: the goal stack and attempt counters must reset
-        between eval runs; the jitted step stays outside so it compiles once."""
+        between eval episodes; the jitted step stays outside so it compiles once."""
         state = {"goal_stack": None, "attempt_count": jnp.zeros((k,), jnp.int32),
                  "needs": jnp.ones((k,), jnp.bool_)}
 
         def policy_fn(_params, single_obs, eval_key):
             if state["goal_stack"] is None:
-                task = sample_task_goals(eval_key, seen, 1)[0]
+                task = sample_goals(eval_key, G, 1)[0]
                 state["goal_stack"] = jnp.zeros((k,), jnp.int32).at[k - 1].set(task)
             action, goal_stack, attempt_count = eval_step(
                 nnx_states, single_obs, state["goal_stack"], state["attempt_count"], state["needs"])
             achieved = wrapped.goal_fn(single_obs)[goal_stack][None]
-            end = close_out(achieved, jnp.zeros((1,), jnp.bool_), attempt_count[None], 1)[0]
+            end = close_out_(achieved, jnp.zeros((1,), jnp.bool_), attempt_count[None], 1)[0]
             state.update(goal_stack=goal_stack, attempt_count=attempt_count, needs=end)
             return action, goal_stack[0]
 
         return policy_fn
 
     print(f"HierQ (deep): k={k} H_levels={H_levels} gammas={[round(g, 3) for g in gammas]} "
-          f"per-goal budget={horizon} | obs {obs_dim}, {n_actions} actions, {G} goals "
-          f"({int(seen0.sum())} seen at reset) | eps {epsilon_start}->{epsilon_finish} over "
-          f"{epsilon_decay_steps} steps | test every {test_interval_chunks} chunks: "
-          f"{G} goals x {test_num_repeats} x {test_num_steps} steps")
+          f"horizon={horizon} | obs {obs_dim}, {n_actions} actions, {G} goals "
+          f"({int(seen0.sum())} seen at reset) | epsilon={epsilon}")
 
-    key, tkey = jax.random.split(key)
-    run_and_log_test(carry.nnx_states, tkey, 0)
-    for chunk_idx, step_idx in enumerate(range(0, n_steps, chunk_size)):
+    for step_idx in range(0, n_steps, chunk_size):
         key, chunk_key = jax.random.split(key)
         carry = run_and_log(carry, chunk_key, chunk_size, step_idx)
         current_env_step = (step_idx + chunk_size) * num_envs
-
-        if (chunk_idx + 1) % test_interval_chunks == 0 or step_idx + chunk_size >= n_steps:
-            key, tkey = jax.random.split(key)
-            run_and_log_test(carry.nnx_states, tkey, current_env_step)
 
         if ckpt_sched.due(step_idx):
             logger.save_checkpoint(jax.device_get(carry.nnx_states), current_env_step)
 
         if eval_sched.due(step_idx):
             print(f"\n--- Running Evaluation at Step {step_idx} ---")
-            eval_states, eval_seen = carry.nnx_states, carry.seen
+            eval_states = carry.nnx_states
             key = run_offpolicy_eval_stage(
-                logger, wrapped, lambda: make_eval_policy_fn(eval_states, eval_seen),
+                logger, wrapped, lambda: make_eval_policy_fn(eval_states),
                 eval_states, key, current_env_step, eval_config)
             print(f"--- Evaluation Complete ---\n")
 
