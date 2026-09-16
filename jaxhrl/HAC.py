@@ -81,16 +81,12 @@ class Critic(nnx.Module):
 # ---------------------------------------------------------------------------
 
 def project(obs: jax.Array, goal_indices: jax.Array) -> jax.Array:
-    """State -> goal-space projection. Used UNCLIPPED for the achievement test
-    and CLIPPED (see clip_to_goal_space) when stored as a hindsight action."""
+    """State -> goal-space projection"""
     return obs[..., goal_indices]
 
 
 def clip_to_goal_space(proj: jax.Array, goal_low: jax.Array, goal_high: jax.Array) -> jax.Array:
-    """Levy's project_state_to_subgoal clips to the subgoal bounds. Without
-    this the agent wanders outside the box, the stored hindsight action lands
-    outside the actor's tanh-reachable range, and the deterministic policy
-    gradient pins the actor to the boundary forever."""
+    """Levy's project_state_to_subgoal clips to the subgoal bounds"""
     return jnp.clip(proj, goal_low, goal_high)
 
 
@@ -206,10 +202,7 @@ def ring_sample(ring: Ring, key: jax.Array, batch_size: int):
 class Window(NamedTuple):
     """The current attempt of one level, held per env so that hindsight-goal
     relabelling can draw its goal from the achieved states of the WHOLE
-    attempt (Levy's finalize_goal_replay). Relabelling on the fly using only
-    past achieved states would make every relabelled row a -1, so the critic
-    would never see the reward=0/discount=0 case. Reward, discount and goal are recomputed at flush and so are
-    not stored."""
+    attempt (Levy's finalize_goal_replay). """
     obs: jax.Array       # (num_envs, H, obs_dim)
     action: jax.Array    # (num_envs, H, act_dim)
     next_obs: jax.Array  # (num_envs, H, obs_dim)
@@ -507,9 +500,7 @@ if __name__ == "__main__":
             masks.append(completes[:, i])
 
             # 2. Subgoal testing transition. Levy penalises only when the child
-            # exhausted its attempts without reaching the subgoal (`maxed_out`).
-            # Gating merely on "not achieved" would also punish subgoals cut
-            # short by an ancestor unwinding, injecting spurious -H targets.
+            # exhausted its attempts without reaching the subgoal (`maxed_out`)
             if i > 0:
                 child_maxed = jnp.logical_and(
                     attempt_count[:, i - 1] >= H_levels[i - 1],
@@ -526,14 +517,6 @@ if __name__ == "__main__":
 
             # 3. Hindsight goal transitions: the whole attempt relabelled with a
             # goal drawn uniformly from the achieved states of that attempt.
-            # Levy's finalize_goal_replay forces its last relabel index to
-            # num_trans-1, so with the default single replay goal the goal is
-            # ALWAYS the attempt's final achieved state. Sampling the index
-            # uniformly instead (an earlier version of this file) leaves every
-            # transition after the drawn index at -1 with no terminal
-            # transition in the window at all -- and since this scheme yields
-            # only ~1 reward-0 transition per window of H, losing it guts the
-            # relabelling's entire learning signal.
             relabel_idx = jnp.maximum(window.count - 1, 0)
             relabel_goal = window.achieved[env_idx, relabel_idx]             # (N, goal_dim)
             relabel_reached = goal_reached(
