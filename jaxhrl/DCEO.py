@@ -122,30 +122,7 @@ def batch_select_dceo_action(keys, obs, dones, taus, options, q_params, q_net, c
 # Losses
 
 def laplacian_loss_fn(laplacian_params, laplacian_net, obs_a, obs_b, obs_i, obs_j, beta):
-    """Cascaded generalized-Laplacian objective (Eq. 2 of Klissarov & Machado,
-    2023, "Deep Laplacian-based Options for Temporally-Extended Exploration"),
-    which is Wang et al. (2021)'s cutoff-weighted extension of the graph-drawing
-    objective from Wu, Tucker & Nachum (2019).
-
-    Both terms are cascaded over a cutoff index i=1..rep_dim (summing over
-    j,k <= i for every cutoff): this asymmetrically weights lower-index
-    dimensions more heavily, which is what forces f_1..f_rep_dim to converge
-    to the individual, correctly-ordered eigenfunctions rather than an
-    arbitrary rotation of their span (and not incidentally, is what stops the
-    loss from being invariant to every dimension collapsing onto the same
-    direction, since dimensions are no longer interchangeable).
-
-    obs_a, obs_b: on-policy consecutive transition pairs (s_t, s_{t+1}), for
-        the attractive term.
-    obs_i, obs_j: two INDEPENDENT samples from the state distribution ("u"
-        and "v" in Wu et al.'s Eq. 6) used for the orthonormality residual.
-        Squaring a Monte-Carlo expectation is biased upward, so Wu et al.'s
-        estimator computes the (f_j*f_k - delta_jk) residual separately
-        within EACH independent batch (same-state pairing in each), then
-        multiplies the two independent residual estimates -- NOT a single
-        Gram matrix built by pairing dimension j from batch i against
-        dimension k from batch j, which would estimate E[f_j]*E[f_k] rather
-        than E[f_j(s)f_k(s)].
+    """Cascaded generalized-Laplacian objective Eq. 2
     """
     phi_a = laplacian_net.apply(laplacian_params, obs_a)
     phi_b = laplacian_net.apply(laplacian_params, obs_b)
@@ -445,8 +422,6 @@ if __name__ == "__main__":
         return jax.lax.scan(scan_step, carry, step_keys)
 
     # Logging 
-
-    # Logging 
     def run_and_log(carry, rng_key, n, step0):
         import numpy as np
         keys = jax.random.split(rng_key, n)
@@ -547,7 +522,7 @@ if __name__ == "__main__":
             
             # Run Trajectory
             key, eval_key = jax.random.split(key)
-            from brll_core.algorithms.common.jax_wrappers import run_eval_episode
+            from jaxhrl.common.wrappers import run_eval_episode
             trajectory = run_eval_episode(
                 env_wrapper=env, 
                 policy_fn=greedy_eval_policy, 
