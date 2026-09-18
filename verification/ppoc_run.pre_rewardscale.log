@@ -1,0 +1,52 @@
+Failed to import warp: No module named 'warp'
+Failed to import mujoco_warp: No module named 'warp'
+=== Hopper: primitives vs. options, deliberation-cost sweep (3 seeds, 400 iters = 13,107,200 env-steps/run) ===
+/home/sam/Documents/jaxhrl/myenv/lib/python3.12/site-packages/brax/io/mjcf.py:480: UserWarning: Brax System, piplines and environments are not actively being maintained. Please see MJX for a well maintained JAX-based physics engine: https://github.com/google-deepmind/mujoco/tree/main/mjx. For a host of environments that use MJX, see: https://github.com/google-deepmind/mujoco_playground.
+  warnings.warn(
+  Primitive actions (1 option), seed 0: final return=1090.2 ep_len=917.5 decision_rate=0.037 (55s)
+  Primitive actions (1 option), seed 1: final return=1038.4 ep_len=970.6 decision_rate=0.067 (46s)
+  Primitive actions (1 option), seed 2: final return=1125.8 ep_len=928.3 decision_rate=0.050 (46s)
+  Options (4), eta=0.0, seed 0: final return=992.0 ep_len=912.2 decision_rate=1.000 (48s)
+  Options (4), eta=0.0, seed 1: final return=818.9 ep_len=775.1 decision_rate=1.000 (46s)
+  Options (4), eta=0.0, seed 2: final return=984.9 ep_len=918.1 decision_rate=1.000 (46s)
+  Options (4), eta=0.01, seed 0: final return=1106.9 ep_len=947.3 decision_rate=0.001 (47s)
+  Options (4), eta=0.01, seed 1: final return=968.7 ep_len=912.4 decision_rate=1.000 (46s)
+  Options (4), eta=0.01, seed 2: final return=1009.4 ep_len=954.9 decision_rate=1.000 (46s)
+  Options (4), eta=0.05, seed 0: final return=998.1 ep_len=947.4 decision_rate=0.001 (47s)
+  Options (4), eta=0.05, seed 1: final return=901.2 ep_len=842.8 decision_rate=1.000 (46s)
+  Options (4), eta=0.05, seed 2: final return=958.2 ep_len=880.2 decision_rate=0.285 (47s)
+  Options (2), eta=0.01, seed 0: final return=1156.0 ep_len=908.2 decision_rate=0.002 (48s)
+  Options (2), eta=0.01, seed 1: final return=1002.2 ep_len=936.1 decision_rate=1.000 (46s)
+  Options (2), eta=0.01, seed 2: final return=955.7 ep_len=888.9 decision_rate=1.000 (47s)
+  Options (2), eta=0.05, seed 0: final return=1071.1 ep_len=937.8 decision_rate=0.001 (46s)
+  Options (2), eta=0.05, seed 1: final return=950.6 ep_len=890.3 decision_rate=0.173 (47s)
+  Options (2), eta=0.05, seed 2: final return=953.6 ep_len=892.2 decision_rate=0.001 (46s)
+
+=== Hopper sweep summary ===
+condition                          final return   AUC return   ep len  decision rate
+Primitive actions (1 option)         1045.1±3          959.8    954.4          0.043
+Options (4), eta=0.0                  934.0±33         806.8    872.3          1.000
+Options (4), eta=0.01                 992.1±30         838.8    926.2          0.667
+Options (4), eta=0.05                 968.8±18         835.7    908.4          0.583
+Options (2), eta=0.01                1023.0±48         875.9    887.9          0.667
+Options (2), eta=0.05                 991.5±22         906.7    921.7          0.072
+
+=== Cross-environment check: ['walker2d', 'halfcheetah'] (2 seeds, 400 iters); best hopper options condition was 'Options (2), eta=0.01' ===
+  [walker2d] Primitive actions (1 option), seed 0: final return=360.9 ep_len=144.3 (55s)
+  [walker2d] Primitive actions (1 option), seed 1: final return=391.2 ep_len=163.2 (48s)
+  [walker2d] Options (2), eta=0.01 [hopper-best], seed 0: final return=392.6 ep_len=159.3 (49s)
+  [walker2d] Options (2), eta=0.01 [hopper-best], seed 1: final return=382.2 ep_len=155.6 (48s)
+  [halfcheetah] Primitive actions (1 option), seed 0: final return=1581.4 ep_len=1000.0 (147s)
+  [halfcheetah] Primitive actions (1 option), seed 1: final return=1858.8 ep_len=1000.0 (146s)
+  [halfcheetah] Options (2), eta=0.01 [hopper-best], seed 0: final return=1330.3 ep_len=1000.0 (147s)
+  [halfcheetah] Options (2), eta=0.01 [hopper-best], seed 1: final return=1188.7 ep_len=1000.0 (149s)
+
+=== Cross-environment summary ===
+  walker2d:
+    Primitive actions (1 option)     final return=333.8±11.9
+    Options (2), eta=0.01 [hopper-best] final return=361.8±3.5
+  halfcheetah:
+    Primitive actions (1 option)     final return=1675.3±106.3
+    Options (2), eta=0.01 [hopper-best] final return=1271.0±29.2
+
+Done in 1635.8s. Summary -> /home/sam/Documents/jaxhrl/verification/results/ppoc_verification_summary.json
