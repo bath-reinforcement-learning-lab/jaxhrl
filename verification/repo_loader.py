@@ -1,15 +1,10 @@
 """
 Imports the *actual* network/loss code straight out of the jaxhrl repo, without
-executing the `if __name__ == "__main__"` training scripts and without needing
-the repo's broken/unrelated infra deps (brll_core, gymnax, mlflow, wandb,
-jaxhrl.common.jax_wrappers -- which doesn't exist on disk at all).
+executing the `if __name__ == "__main__"` training scripts
 
 We do this by pre-registering lightweight stand-ins for jaxhrl.common.{utils,
 logger,wrappers,jax_wrappers} in sys.modules *before* importing the algorithm
-files, so `from jaxhrl.common.utils import parse_config` etc. resolve to the
-stand-in instead of touching the real (dependency-heavy) files on disk. None
-of those symbols are used by the network/loss functions we import -- they're
-only referenced inside each file's __main__ block.
+files, so `from jaxhrl.common.utils import parse_config` etc. 
 """
 import importlib
 import importlib.util
@@ -41,20 +36,6 @@ def install_infra_stubs():
         make_jax_env=lambda *a, **k: None,
         run_eval_episode=lambda *a, **k: None,
     )
-    # The newer algorithm files (option_critic.py, METRA.py) import their infra
-    # from `brll_core.algorithms.common.*` instead of `jaxhrl.common.*`.
-    for parent in ("brll_core", "brll_core.algorithms", "brll_core.algorithms.common"):
-        if parent not in sys.modules:
-            _install_stub(parent)
-    _install_stub("brll_core.algorithms.common.utils", parse_config=lambda: {})
-    _install_stub("brll_core.algorithms.common.logger", Logger=object)
-    _install_stub(
-        "brll_core.algorithms.common.jax_wrappers",
-        make_jax_env=lambda *a, **k: None,
-        run_eval_episode=lambda *a, **k: None,
-    )
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
 
 
 def load_dceo():
@@ -117,6 +98,12 @@ def load_metra():
     return metra
 
 
+def load_ppoc():
+    install_infra_stubs()
+    import jaxhrl.PPOC as ppoc
+    return ppoc
+
+
 if __name__ == "__main__":
     dceo = load_dceo()
     print("DCEO OK:", dceo.LaplacianRepresentationNetwork, dceo.laplacian_loss_fn, dceo.q_loss_fn)
@@ -137,3 +124,6 @@ if __name__ == "__main__":
     metra = load_metra()
     print("METRA OK:", metra.Encoder, metra.Actor, metra.metra_components,
           metra.sample_z, metra.metra_action)
+    ppoc = load_ppoc()
+    print("PPOC OK:", ppoc.PolicyNetwork, ppoc.ValueNetwork, ppoc.select_ppoc_action,
+          ppoc.ppoc_policy_loss_fn, ppoc.ppoc_value_loss_fn)
