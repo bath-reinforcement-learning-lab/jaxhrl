@@ -15,17 +15,18 @@ Our implementations run very fast. HiPPO runs at ~73000 env-steps/s on a single 
 
 ## Algorithms
 
-| Algorithm | Paper | Status |
+| Algorithm | Paper | Description |
 |---|---|---|
-| [DCEO](jaxhrl/DCEO.py) | Klissarov & Machado, *"Deep Laplacian-based Options for Temporally-Extended Exploration"* (ICML 2023) | Verified — the Laplacian representation correctly recovers the true graph eigenvectors |
-| [h-DQN](jaxhrl/h-DQN.py) | Kulkarni et al., *"Hierarchical Deep Reinforcement Learning: Integrating Temporal Abstraction and Intrinsic Motivation"* (2016) | Verified — matches the paper's own toy-MDP result |
-| [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | Verified - GPI's zero-shot skill combination matches the paper's own worked example |
-| [HiPPO](jaxhrl/HiPPO.py) | Li, Florensa, Clavera & Abbeel, *"Sub-Policy Adaptation for Hierarchical Reinforcement Learning"* (ICLR 2020) | Verified — reproduces the paper's own time-commitment ablation and skill-diversity diagnostic |
-| [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | Verified — every mechanism the paper specifies holds in the transitions it emits (40/40), and 2-level HAC reaches the goal in 2.7x fewer steps than a flat agent |
-| [HierQ](jaxhrl/HierQ.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* (Algorithm 2, Appendix) | Verified — every mechanism Algorithm 2 specifies holds in the transitions it emits (34/34), and 3-level > 2-level > flat reproduces exactly, on every seed |
-| [option_critic](jaxhrl/option_critic.py) | Bacon, Harb & Precup, *"The Option-Critic Architecture"* (AAAI 2017) |  Verified — reproduces the paper's four-rooms transfer direction (Figure 3, options recover faster after the goal moves) and option specialization (Figure 4) |
-| [MOC](jaxhrl/MOC.py) | Klissarov & Precup, *"Flexible Option Learning"* (NeurIPS 2021) |  Verified — reproduces the paper's four-rooms result (Figure 1b): multi-updating recovers from the goal relocation far faster than vanilla Option-Critic and with ~10x lower seed variance |
-| [METRA](jaxhrl/METRA.py) | Park, Rybkin & Levine, *"Scalable Unsupervised RL with Metric-Aware Abstraction"* (ICLR 2024) | Verified — on a reward-free FourRooms the learned φ recovers the shortest-path metric, skills move φ in commanded directions, and φ drives zero-shot goal reaching |
+| [DCEO](jaxhrl/DCEO.py) | Klissarov & Machado, *"Deep Laplacian-based Options for Temporally-Extended Exploration"* (ICML 2023) | Extends Eigenoptions to continuous domains by using a neural approximation of the graph Laplacian. |
+| [h-DQN](jaxhrl/h-DQN.py) | Kulkarni et al., *"Hierarchical Deep Reinforcement Learning: Integrating Temporal Abstraction and Intrinsic Motivation"* (2016) | Extends DQN to a two-level hierarchy, where a meta-controller sets goals and a lower-level controller pursues them. Both levels are trained with goal-conditioned deep Q-learning. |
+| [Option Keyboard](jaxhrl/option_keyboard.py) | Barreto et al., *"The Option Keyboard: Combining Skills in Reinforcement Learning"* (NeurIPS 2019) | Combines a set of base options into new ones by linearly mixing their cumulants with Successor Features and GPI. |
+| [Option Critic](jaxhrl/option_critic.py) | Bacon, Harb & Precup, *"The Option-Critic Architecture"* (AAAI 2017) |  Extends policy-gradient theorem to options to learn them end-to-end. |
+| [MOC](jaxhrl/MOC.py) | Klissarov & Precup, *"Flexible Option Learning"* (NeurIPS 2021) |  Flexible Option Critic extends intra-option learning to update all options consistent with primitive action chosen, boosting data efficiency. |
+| [PPO Option Critic](jaxhrl/PPOC.py) | Klissarov et al., *"Learning Options End-to-End for Continuous Action Tasks"* (NeurIPS 2017 worskhop) | Extends option critic to continuous environments using PPO. |
+| [HiPPO](jaxhrl/HiPPO.py) | Li, Florensa, Clavera & Abbeel, *"Sub-Policy Adaptation for Hierarchical Reinforcement Learning"* (ICLR 2020) | Approximates policy gradient by assuming options are maximally diverse, skills are fixed length sampled from a cat distribution, no learnt termination function. |
+| [HAC](jaxhrl/HAC.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* | Uses hindsight experience replay to relabel unsuccessful trajectories as achieving a different goal to help sparsity.|
+| [HierQ](jaxhrl/HierQ.py) | Levy et al., *"Learning Multi-Level Hierarchies with Hindsight"* (Algorithm 2, Appendix) | From the HAC paper appendix for discrete environments |
+| [METRA](jaxhrl/METRA.py) | Park, Rybkin & Levine, *"Scalable Unsupervised RL with Metric-Aware Abstraction"* (ICLR 2024) | Discovers diverse scalable set of skills unsupervised that cover as much of the state space as possible by maximising temporal distance between skills.|
 
 ## Verification
 
