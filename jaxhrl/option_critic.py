@@ -11,9 +11,9 @@ os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.90"
 os.environ["TF_GPU_ALLOCATOR"] = "cuda_malloc_async"
 
-from brll_core.algorithms.common.utils import parse_config
-from brll_core.algorithms.common.logger import Logger
-from brll_core.algorithms.common.jax_wrappers import make_jax_env
+from jaxhrl.common.utils import parse_config
+from jaxhrl.common.logger import Logger
+from jaxhrl.common.wrappers import make_jax_env
 
 
 class OptionCriticNetwork(nn.Module):
@@ -376,7 +376,7 @@ if __name__ == "__main__":
             logger.save_checkpoint(frozen_params, current_env_step)
 
             key, eval_key = jax.random.split(key)
-            from brll_core.algorithms.common.jax_wrappers import run_eval_episode
+            from jaxhrl.common.wrappers import run_eval_episode
             trajectory = run_eval_episode(
                 env_wrapper=env,
                 policy_fn=greedy_eval_policy,
