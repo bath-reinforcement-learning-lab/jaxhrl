@@ -10,6 +10,7 @@ stochastic chain)
 Reproduce with: `.venv/bin/python dceo_verify.py && .venv/bin/python hdqn_verify.py
 && .venv/bin/python okeyboard_verify.py && .venv/bin/python hippo_verify.py
 && .venv/bin/python option_critic_verify.py && .venv/bin/python moc_verify.py
+&& .venv/bin/python ppoc_verify.py
 && .venv/bin/python hac_verify.py && .venv/bin/python hac_faithfulness.py
 && .venv/bin/python hierq_verify.py && .venv/bin/python hierq_faithfulness.py
 && .venv/bin/python metra_verify.py`
@@ -479,6 +480,79 @@ with the diversity cost.
 
 Artifacts: `results/moc_transfer_curves.png`,
 `results/moc_verification_summary.json`, `results/moc_run.log`.
+
+---
+
+## PPOC — "Learning Options End-to-End for Continuous Action Tasks" (Klissarov, Bacon, Harb & Precup, NeurIPS 2017 Deep RL workshop)
+
+Options with a deliberation cost beat primitive actions
+on all three tested environments (Hopper, Walker2d, HalfCheetah), reproducing
+the paper's central claim (Section 4 / Figure 1). The paper's own reward rescaling (Section 4: "In the case of options, we
+also divide the reward by 10 ... making [the termination probability
+gradient] more stable"), applied only to options runs. Without it, every
+seed's termination gate saturated to decision_rate≈1.0 — the option is
+picked again every single step, so none of the option conditional subpolicies
+ever get to specialise — and options underperformed primitives on 2 of 3
+environments. With the reward/10 rescaling added, that saturation breaks up
+and options clearly win everywhere tested (below).
+
+Real brax physics throughout (`hopper`, `walker2d`, `halfcheetah` — the three
+of the paper's four locomotion tasks with a brax equivalent; `HopperIceBlock`
+is a custom, unpublished env with no brax counterpart and is skipped). 
+
+Primitive actions (`num_options=1`, `delib_cost=0`, `reward_scale=1.0`) use
+the same `PolicyNetwork`/`ValueNetwork` code path with the option machinery
+collapsed to one option. This is the same pattern `option_critic_verify.py` uses for
+its flat baseline. `reward_scale` (a new `jaxhrl/PPOC.py` config option, wired
+through `ppo_update`'s `r_hat` computation) is 1.0 (a no-op) unless set, so
+the shipped `jaxhrl/configs/PPOC.brax.yaml` (which trains `num_options=4`)
+sets `reward_scale: 0.1` to match the paper's own options-only rescaling.
+
+### Deliberation cost eta — Hopper, 3 seeds
+
+| condition | final return | decision rate |
+|---|---|---|
+| Primitive actions (1 option) | 1054.3 ± 14.8 | 0.041 |
+| Options (4), eta=0.0 | 1232.5 ± 80.9 | 0.657 |
+| Options (4), eta=0.01 | 1230.8 ± 58.2 | 0.278 |
+| Options (4), eta=0.05 | **1290.0 ± 67.3** | 0.016 |
+| Options (2), eta=0.01 | **1314.8 ± 135.4** | 0.049 |
+| Options (2), eta=0.05 | 1197.8 ± 117.9 | 0.010 |
+
+Every options condition beats the primitive baseline (1054.3), by 14-25% at
+the mean. Per-seed variance is high (SEMs of 58-135 on 3 seeds), so this
+sweep does not cleanly resolve which specific eta is best, or reproduce a
+crisp "non-monotonic in eta" curve the way the deliberation-cost mechanism
+was originally expected to (the 2-option arm's eta=0.01→0.05 step does drop,
+1314.8→1197.8, consistent with the paper's "not directly proportional"
+framing, but the 4-option arm's eta=0.0→0.05 step rises throughout, within
+noise of flat). What the sweep does resolve clearly is the decision-rate
+story: eta=0 leaves 2 of 3 seeds saturated near decision_rate=1.0 (options
+degenerating into per-step resampling); every nonzero eta pushes every seed's
+median decision rate down by an order of magnitude, letting options actually
+persist and specialise.
+
+### Options vs. primitives across environments, 2 seeds
+
+Best options condition carried over from the hopper sweep (`Options (2),
+eta=0.01`, the top performer above):
+
+| environment | Primitive actions (1 option) | Options (2), eta=0.01 |
+|---|---|---|
+| Hopper | 1054.3 ± 14.8 | **1314.8 ± 135.4** |
+| Walker2d | 337.6 ± 8.0 | **904.7 ± 60.1** |
+| HalfCheetah | 1688.5 ± 118.9 | **2047.7 ± 47.7** |
+
+Options win on all 3 environments, by margins well outside seed noise on
+Walker2d (2.7x, SEMs of 8.0 vs 60.1) and HalfCheetah (21%, SEMs of 118.9 vs
+47.7), and by a large mean gap on Hopper too even though that arm's seed
+variance is wide enough (135.4 SEM) that any individual pair of runs could
+overlap. This reproduces the paper's "options beat primitive actions" claim
+across the tested environments.
+
+Artifacts: `results/ppoc_hopper_sweep.png`, `results/ppoc_walker2d_curves.png`,
+`results/ppoc_halfcheetah_curves.png`, `results/ppoc_verification_summary.json`,
+`ppoc_run.log`.
 
 ---
 
